@@ -82,97 +82,98 @@ def compute_vorp_star(
     teams: int = 12,
     starters_per_team: dict = None,
     use_ppg: bool = False,
-    min_games_for_ppg: int = 12,
-    pool_factor: float = 2.0,         # pool ~ 2× starters per position
-    winsor_limits: tuple = (0.02, 0.98)  # clamp extremes for robust scale
+    min_games_for_ppg: int = 12,     # threshold for “full season”
+    pool_factor: float = 2.0,
+    winsor_limits: tuple = (0.02, 0.98),
 ):
     """
-    Returns a copy of df with columns:
-      - points_used         (PPG or season total)
-      - rep_points          (replacement level for the position)
-      - vorp_raw            (points_used - rep_points)
-      - pos_scale_robust    (1.4826 * MAD of (points_used - rep_points) in pool)
-      - vorp_star           (vorp_raw / pos_scale_robust)
-      - injury_flag         (True if < min_games_for_ppg when use_ppg)
+    Adds:
+      - partial_season (True for 3..min_games_for_ppg-1)
+      - vorp_star_extrap (17-game pace VORP*, only meaningful for partial seasons)
+    Uses replacement baseline computed from **season totals**.
     """
-
     df = df.copy()
 
-    # 1) Decide points metric (total or PPG)
+    # 1) Metric for current-season VORP* display
     if use_ppg:
         df["points_used"] = df["fantasy_points_ppr"] / df["g"].replace(0, np.nan)
-        # flag small-sample seasons
-        df["injury_flag"] = (df["g"] < min_games_for_ppg) | (~np.isfinite(df["points_used"]))
     else:
         df["points_used"] = df["fantasy_points_ppr"]
-        df["injury_flag"] = (df["g"] < min_games_for_ppg) | (~np.isfinite(df["points_used"]))
-    # Fill any NaNs created (e.g., 0 games) with 0 so later math works;
-    # they’ll still be flagged as injury_flag=True if use_ppg
     df["points_used"] = df["points_used"].fillna(0.0)
 
-    # 2) Replacement level per position
-    # Default lineup for 12-team, 1QB/2RB/2WR/1TE (adjust if your league differs)
+    # --- Flags ---
+    FULL_SEASON_MIN = int(min_games_for_ppg)  # e.g., 12
+    df["partial_season"] = (df["g"] >= 3) & (df["g"] < FULL_SEASON_MIN)
+    df["injury_flag"] = df["g"] < FULL_SEASON_MIN  # keep if you still want a general flag
+
+    # 2) Replacement level per position (from **season totals**)
     if starters_per_team is None:
         starters_per_team = {"QB": 1.25, "RB": 2.5, "WR": 2.5, "TE": 1.25}
 
-    # How many starters in the league per position = teams * starters_per_team[pos]
     rep_index = {
         pos: int(teams * starters_per_team.get(pos, 0))
         for pos in df["fantasy_pos"].unique()
     }
-    
-    # Helper: robust MAD scale
-    def mad(x):
-        med = np.median(x)
-        return 1.4826 * np.median(np.abs(x - med))
 
-    # Helper: winsorize
     def winsorize(s, lo=0.02, hi=0.98):
         ql, qh = np.quantile(s, [lo, hi])
         return np.clip(s, ql, qh)
 
     out_frames = []
     for pos, grp in df.groupby("fantasy_pos", sort=False):
-        # sort high→low by points_used
+        # --- Replacement from TOTALS ---
+        totals_sorted = grp.sort_values("fantasy_points_ppr", ascending=False)
+        R = rep_index.get(pos, 0)
+        if R <= 0 or R > len(totals_sorted):
+            rep_points_total = 0.0
+        else:
+            rep_points_total = float(totals_sorted.iloc[R - 1]["fantasy_points_ppr"])
+
+        # For the current (display) metric:
         gsort = grp.sort_values("points_used", ascending=False)
 
-        # replacement rank (e.g., RB24). If none defined, skip normalization gracefully.
-        # R = rep_index.get(pos, 0)
-        # if R <= 0 or R > len(gsort):
-        #     # no valid replacement index; fall back to zero baseline/scale=1 to avoid div-by-0
-        #     rep_points = 0.0
-        # else:
-        #     rep_points = gsort.iloc[R-1]["points_used"]
-        
-    
-        R = rep_index.get(pos, 0)
-        if R <= 0 or R > len(gsort):
-            rep_points = 0.0
+        # VORP_raw (display metric) must be in same space as replacement.
+        # If use_ppg=True, points_used is PPG; convert to a total-like space
+        # so subtraction against rep_points_total is apples-to-apples.
+        if use_ppg:
+            # estimate season-total from current points_used (PPG) by *games played*
+            # (this makes the displayed vorp_star reflect actual played total vs replacement)
+            points_used_total_like = gsort["points_used"] * gsort["g"]
         else:
-            rep_points = gsort.iloc[R-1]["points_used"]
+            points_used_total_like = gsort["points_used"]
 
+        gsort = gsort.assign(rep_points=rep_points_total)
+        gsort = gsort.assign(vorp_raw=points_used_total_like - rep_points_total)
 
-        gsort = gsort.assign(rep_points=rep_points)
-        gsort = gsort.assign(vorp_raw=gsort["points_used"] - rep_points)
-
-        # build pool ~ top (pool_factor × starters) to estimate robust spread
+        # Robust scale from top-of-pool VORP_raw
         pool_size = int(max(R * pool_factor, min(len(gsort), R))) if R > 0 else min(len(gsort), 24)
         pool = gsort.iloc[:pool_size]["vorp_raw"].values
-
-        # winsorize pool then MAD
         pool_w = winsorize(pool, *winsor_limits) if len(pool) else np.array([0.0])
-        scale = np.std(pool_w, ddof=0)   # population std dev
-        if scale == 0 or not np.isfinite(scale):
-            scale = 1.0   # avoid divide by 0
+
+        scale = float(np.std(pool_w, ddof=0))
+        if not np.isfinite(scale) or scale == 0:
+            scale = 1.0
 
         gsort = gsort.assign(pos_scale_robust=scale)
         gsort = gsort.assign(vorp_star=gsort["vorp_raw"] / scale)
+
+        # --- 17-game extrapolation (for partial seasons only) ---
+        ppg = gsort["fantasy_points_ppr"] / gsort["g"].replace(0, np.nan)
+        proj_points_17 = (ppg * 17).fillna(gsort["fantasy_points_ppr"])  # fallback if g==0
+
+        vorp_raw_proj = proj_points_17 - rep_points_total
+        vorp_star_extrap = vorp_raw_proj / scale
+
+        # only meaningful for partial rows; keep original otherwise
+        gsort = gsort.assign(
+            vorp_star_extrap=np.where(gsort["partial_season"], vorp_star_extrap, gsort["vorp_star"])
+        )
 
         out_frames.append(gsort)
 
     result = pd.concat(out_frames, axis=0).sort_index()
 
-    # Optional: ranks
+    # Ranks on the actual (non-extrapolated) vorp_star
     result["vorp_star_rank_overall"] = result["vorp_star"].rank(method="dense", ascending=False).astype(int)
     result["vorp_star_rank_pos"] = (
         result.groupby("fantasy_pos")["vorp_star"].rank(method="dense", ascending=False).astype(int)
@@ -228,9 +229,13 @@ def build_vorp_table(year: int, use_ppg: bool = False) -> Optional[pd.DataFrame]
     )
 
     out_cols = [
-        "player_name", "team", "fantasy_pos", "g",
-        "fantasy_points_ppr", "vorp_star",
-        "vorp_star_rank_overall", "vorp_star_rank_pos",
+    "player_name", "team", "fantasy_pos", "g",
+    "fantasy_points_ppr", "vorp_star",
+    "vorp_star_rank_overall", "vorp_star_rank_pos",
+    # NEW
+    "partial_season", "vorp_star_extrap",
     ]
     out = df_v[out_cols].sort_values("vorp_star", ascending=False).reset_index(drop=True)
+
+
     return out

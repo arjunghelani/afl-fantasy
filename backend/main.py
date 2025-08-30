@@ -93,6 +93,11 @@ class PlayerVorp(BaseModel):
     vorp_star: float
     vorp_star_rank_overall: int
     vorp_star_rank_pos: int
+    # NEW
+    partial_season: Optional[bool] = None
+    vorp_star_extrap: Optional[float] = None
+
+
 
 class VorpResponse(BaseModel):
     year: int
@@ -596,23 +601,23 @@ def get_vorp(
             players.append(
                 PlayerVorp(
                     player_name=str(getattr(row, "player_name")),
-                    team=(
-                        None
-                        if pd.isna(getattr(row, "team", None))
-                        else str(getattr(row, "team", None))
-                    ),
+                    team=(None if pd.isna(getattr(row, "team", None)) else str(getattr(row, "team", None))),
                     fantasy_pos=str(getattr(row, "fantasy_pos")),
-                    g=(
-                        None
-                        if pd.isna(getattr(row, "g"))
-                        else int(getattr(row, "g"))
-                    ),
+                    g=(None if pd.isna(getattr(row, "g")) else int(getattr(row, "g"))),
                     fantasy_points_ppr=float(getattr(row, "fantasy_points_ppr")),
                     vorp_star=float(getattr(row, "vorp_star")),
                     vorp_star_rank_overall=int(getattr(row, "vorp_star_rank_overall")),
                     vorp_star_rank_pos=int(getattr(row, "vorp_star_rank_pos")),
+                    # NEW
+                    partial_season=bool(getattr(row, "partial_season", False)),
+                    vorp_star_extrap=(
+                        None if pd.isna(getattr(row, "vorp_star_extrap", np.nan))
+                        else float(getattr(row, "vorp_star_extrap"))
+                    ),
                 )
             )
+
+
         except Exception as e:
             # Skip any bad row rather than nuking the whole response
             print(f"[vorp] skipped row due to serialization error: {e}")

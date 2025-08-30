@@ -1,0 +1,23 @@
+# Node (frontend)
+node_modules/
+.next/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Python (backend)
+__pycache__/
+*.py[cod]
+*.db
+*.log
+
+# Environment + venv (both frontend & backend)
+.env
+.env.*
+venv/
+backend/venv/
+frontend/venv/
+
+# OS
+.DS_Store
+Thumbs.db

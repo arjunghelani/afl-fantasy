@@ -2,20 +2,22 @@ import requests
 from bs4 import BeautifulSoup, Comment
 import pandas as pd
 import re
+import numpy as np
+from typing import Optional, List, Dict, Any
 
+# -----------------------------
+# Scraper (unchanged)
+# -----------------------------
 def scrape_pfr_fantasy(year: int) -> pd.DataFrame:
     url = f"https://www.pro-football-reference.com/years/{year}/fantasy.htm"
     headers = {"User-Agent": "Mozilla/5.0"}
     html = requests.get(url, headers=headers).text
     soup = BeautifulSoup(html, "html.parser")
 
-    # Helper: return the fantasy table element whether it's in DOM or inside comments
     def find_fantasy_table(soup: BeautifulSoup):
-        # 1) try live
         t = soup.find("table", {"id": "fantasy"})
         if t:
             return t
-        # 2) scan comments
         for c in soup.find_all(string=lambda t: isinstance(t, Comment)):
             if 'id="fantasy"' in c:
                 frag = BeautifulSoup(c, "html.parser")
@@ -28,55 +30,42 @@ def scrape_pfr_fantasy(year: int) -> pd.DataFrame:
     if table is None:
         raise ValueError(f"Fantasy table not found for {year}")
 
-    # Build column order from the LAST header row in thead (skip over_header rows)
     thead = table.find("thead")
     header_rows = [tr for tr in thead.find_all("tr") if "over_header" not in tr.get("class", [])]
-    # last header row is the one with the actual columns
     last_hdr = header_rows[-1]
+
     cols = []
     for th in last_hdr.find_all("th"):
         key = th.get("data-stat", "").strip()
-        if key:  # skip corner blanks
+        if key:
             cols.append(key)
 
-    # Parse body rows using data-stat keys
     data = []
     tbody = table.find("tbody")
     for tr in tbody.find_all("tr"):
-        # PFR sometimes repeats a header row inside tbody with class="thead"
         if "thead" in tr.get("class", []):
             continue
-
         row = {}
-        # some tables have a row header in <th scope="row">
         th = tr.find("th", {"scope": "row"})
         if th is not None:
             k = th.get("data-stat", "").strip() or "rk"
             row[k] = th.get_text(strip=True)
-
         for td in tr.find_all("td"):
             k = td.get("data-stat", "").strip()
             if not k:
                 continue
             row[k] = td.get_text(strip=True)
+        if row:
+            data.append(row)
 
-        # skip completely empty rows
-        if not row:
-            continue
-        data.append(row)
-
-    # Create DataFrame and align to column order (keep any extra keys too)
     df = pd.DataFrame(data)
-
-    # Ensure the final column order starts with `cols` then any extras
     extras = [c for c in df.columns if c not in cols]
     df = df[[c for c in cols if c in df.columns] + extras]
 
-    # Clean: remove repeated header rows if any sneaked in
     if "player" in df.columns:
         df = df[df["player"].str.lower() != "player"]
 
-    # Coerce numeric columns
+    # Coerce numeric-ish columns
     for c in df.columns:
         if c in ("player", "team", "pos", "tm"):
             continue
@@ -84,33 +73,16 @@ def scrape_pfr_fantasy(year: int) -> pd.DataFrame:
 
     return df
 
-# Example usage
-year = None
-df_year = scrape_pfr_fantasy(year)
 
-df_year['player_name'] = df_year['player'].str.replace(r"[*+]", "", regex=True).str.strip()
-stats = df_year[['player_name', 'team', 'fantasy_pos', 'g', 'gs', 'fantasy_points_ppr']]
-stats = stats.loc[stats['fantasy_pos'].isin(['QB', 'RB', 'WR', 'TE'])]
-stats['fantasy_points_ppr'].fillna(0, inplace=True)
-stats["pos_rank"] = (
-    stats.groupby("fantasy_pos")["fantasy_points_ppr"]
-      .rank(method="dense", ascending=False)
-      .astype(int)
-)
-
-stats["full_rank"] = (
-    stats["fantasy_points_ppr"]
-      .rank(method="dense", ascending=False)
-      .astype(int)
-)
-
-
+# -----------------------------
+# Your VORP* formula (plugged)
+# -----------------------------
 def compute_vorp_star(
     df: pd.DataFrame,
     teams: int = 12,
     starters_per_team: dict = None,
     use_ppg: bool = False,
-    min_games_for_ppg: int = 8,
+    min_games_for_ppg: int = 12,
     pool_factor: float = 2.0,         # pool ~ 2× starters per position
     winsor_limits: tuple = (0.02, 0.98)  # clamp extremes for robust scale
 ):
@@ -133,8 +105,7 @@ def compute_vorp_star(
         df["injury_flag"] = (df["g"] < min_games_for_ppg) | (~np.isfinite(df["points_used"]))
     else:
         df["points_used"] = df["fantasy_points_ppr"]
-        df["injury_flag"] = False
-
+        df["injury_flag"] = (df["g"] < min_games_for_ppg) | (~np.isfinite(df["points_used"]))
     # Fill any NaNs created (e.g., 0 games) with 0 so later math works;
     # they’ll still be flagged as injury_flag=True if use_ppg
     df["points_used"] = df["points_used"].fillna(0.0)
@@ -142,14 +113,14 @@ def compute_vorp_star(
     # 2) Replacement level per position
     # Default lineup for 12-team, 1QB/2RB/2WR/1TE (adjust if your league differs)
     if starters_per_team is None:
-        starters_per_team = {"QB": 1, "RB": 2, "WR": 2, "TE": 1}
+        starters_per_team = {"QB": 1.25, "RB": 2.5, "WR": 2.5, "TE": 1.25}
 
     # How many starters in the league per position = teams * starters_per_team[pos]
     rep_index = {
-        pos: teams * starters_per_team.get(pos, 0)
+        pos: int(teams * starters_per_team.get(pos, 0))
         for pos in df["fantasy_pos"].unique()
     }
-
+    
     # Helper: robust MAD scale
     def mad(x):
         med = np.median(x)
@@ -173,16 +144,12 @@ def compute_vorp_star(
         # else:
         #     rep_points = gsort.iloc[R-1]["points_used"]
         
-        if pos == "TE":
-            # use average of TE13–TE20 as replacement
-            tail = gsort.iloc[8:12]["points_used"]  # 0-based index → TE13 is row 12
-            rep_points = tail.mean() if len(tail) else 0.0
+    
+        R = rep_index.get(pos, 0)
+        if R <= 0 or R > len(gsort):
+            rep_points = 0.0
         else:
-            R = rep_index.get(pos, 0)
-            if R <= 0 or R > len(gsort):
-                rep_points = 0.0
-            else:
-                rep_points = gsort.iloc[R-1]["points_used"]
+            rep_points = gsort.iloc[R-1]["points_used"]
 
 
         gsort = gsort.assign(rep_points=rep_points)
@@ -194,12 +161,9 @@ def compute_vorp_star(
 
         # winsorize pool then MAD
         pool_w = winsorize(pool, *winsor_limits) if len(pool) else np.array([0.0])
-        scale = mad(pool_w)
+        scale = np.std(pool_w, ddof=0)   # population std dev
         if scale == 0 or not np.isfinite(scale):
-            # fallback: use IQR/1.349 (approximately SD under normality) or 1 to avoid divide-by-0
-            q1, q3 = np.percentile(pool_w, [25, 75]) if len(pool_w) else (0.0, 0.0)
-            iqr = q3 - q1
-            scale = (iqr / 1.349) if iqr > 0 else 1.0
+            scale = 1.0   # avoid divide by 0
 
         gsort = gsort.assign(pos_scale_robust=scale)
         gsort = gsort.assign(vorp_star=gsort["vorp_raw"] / scale)
@@ -216,29 +180,57 @@ def compute_vorp_star(
 
     return result
 
-# -------------------------
-# Example usage on your df:
-# -------------------------
-# df has: player_name, team, fantasy_pos, g, gs, fantasy_points_ppr, pos_rank, full_rank
 
-# Example for 12-team, 1QB/2RB/2WR/1TE, using season totals:
-df_v = compute_vorp_star(
-    stats,
-    teams=12,
-    starters_per_team={"QB": 1, "RB": 2, "WR": 2, "TE": 1},
-    use_ppg=False,           # set True if you prefer per-game
-    min_games_for_ppg=8,
-    pool_factor=2.0,
-    winsor_limits=(0.02, 0.98),
-)
+# -----------------------------
+# Public builder used by API
+# -----------------------------
+ALLOWED_POS = {"QB", "RB", "WR", "TE"}
 
-# Columns now available:
-# ['points_used','rep_points','vorp_raw','pos_scale_robust','vorp_star',
-#  'injury_flag','vorp_star_rank_overall','vorp_star_rank_pos', ...]
-# Example view:
-cols = [
-    "player_name","team","fantasy_pos","fantasy_points_ppr","vorp_star","vorp_star_rank_overall", "vorp_star_rank_pos"
-]
-df_v_filt = df_v[cols].sort_values(["vorp_star"], ascending=False)
+def build_vorp_table(year: int, use_ppg: bool = False) -> Optional[pd.DataFrame]:
+    """
+    Returns DataFrame:
+    ['player_name','team','fantasy_pos','g','fantasy_points_ppr',
+     'vorp_star','vorp_star_rank_overall','vorp_star_rank_pos']
+    sorted by vorp_star desc.
+    """
+    starters_per_team = {"QB": 1, "RB": 2, "WR": 2, "TE": 1}
+
+    # 1) scrape
+    df = scrape_pfr_fantasy(year)
+
+    # 2) clean
+    df["player_name"] = (
+    df["player"]
+    .astype(str)
+    .str.replace(r"[*+.]", "", regex=True)  # remove *, +, and .
+    .str.replace(r"\s+", " ", regex=True)
+    .str.strip()
+    )
 
 
+    cols_keep = ["player_name", "team", "fantasy_pos", "g", "gs", "fantasy_points_ppr"]
+    stats = df.loc[:, [c for c in cols_keep if c in df.columns]].copy()
+    stats = stats[stats["fantasy_pos"].isin(ALLOWED_POS)].copy()
+
+    for c in ["g", "gs", "fantasy_points_ppr"]:
+        if c in stats.columns:
+            stats[c] = pd.to_numeric(stats[c], errors="coerce").fillna(0.0)
+
+    # 3) compute VORP* (your formula)
+    df_v = compute_vorp_star(
+        stats,
+        teams=12,
+        starters_per_team={"QB": 1.25, "RB": 2.5, "WR": 2.5, "TE": 1.25},
+        use_ppg=False,           # set True if you prefer per-game
+        min_games_for_ppg=12,
+        pool_factor=1,
+        winsor_limits=(0.02, 0.98),
+    )
+
+    out_cols = [
+        "player_name", "team", "fantasy_pos", "g",
+        "fantasy_points_ppr", "vorp_star",
+        "vorp_star_rank_overall", "vorp_star_rank_pos",
+    ]
+    out = df_v[out_cols].sort_values("vorp_star", ascending=False).reset_index(drop=True)
+    return out

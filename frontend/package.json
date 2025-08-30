@@ -10,6 +10,7 @@
     "dev-backend": "cd ../backend && source .venv/bin/activate && uvicorn main:app --reload"
   },
   "dependencies": {
+    "framer-motion": "^12.23.12",
     "next": "15.5.2",
     "react": "19.1.0",
     "react-dom": "19.1.0"

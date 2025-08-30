@@ -4,6 +4,9 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from espn_api.football import League
+from fastapi import Query
+import pandas as pd
+import re
 
 LEAGUE_ID = int(os.getenv("LEAGUE_ID", "86952922"))
 SUPPORTED_YEARS = {2020, 2021, 2022, 2024}
@@ -79,6 +82,23 @@ class DraftResponse(BaseModel):
     year: int
     league_id: int
     picks: List[DraftPick]
+    
+
+class PlayerVorp(BaseModel):
+    player_name: str
+    team: Optional[str] = None
+    fantasy_pos: str
+    g: Optional[int] = None
+    fantasy_points_ppr: float
+    vorp_star: float
+    vorp_star_rank_overall: int
+    vorp_star_rank_pos: int
+
+class VorpResponse(BaseModel):
+    year: int
+    players: List[PlayerVorp]
+    count: int
+    used_ppg: bool = False
     
 import json
 from pathlib import Path
@@ -462,6 +482,10 @@ def get_draft(year: int) -> DraftResponse:
             or getattr(getattr(p, "player", None), "name", None)
             or "TBD"
         )
+        
+        player_name = re.sub(r"[*+.]", "", str(player_name)).strip()
+        player_name = re.sub(r"\s+", " ", player_name)
+
 
         position = None
         pro_team = None
@@ -504,6 +528,105 @@ def get_draft(year: int) -> DraftResponse:
 
 
 
+@app.get("/metrics/vorp/{year}", response_model=VorpResponse)
+def get_vorp(
+    year: int,
+    use_ppg: bool = Query(False, description="Use points per game"),
+    top: int = Query(500, ge=1, le=2000, description="Limit rows"),
+):
+    # 1) Build the table
+    try:
+        from vorp import build_vorp_table
+        table = build_vorp_table(year=year, use_ppg=use_ppg)
+    except Exception as e:
+        # Surface the root cause — this is what produced your 502
+        raise HTTPException(status_code=502, detail=f"Failed to build VORP*: {e}")
+
+    if table is None or len(table) == 0:
+        # Return a valid (empty) response so the UI can fall back gracefully
+        return VorpResponse(year=year, players=[], count=0, used_ppg=use_ppg)
+
+    table = table.head(top).copy()
+
+    # 2) Ensure required columns exist
+    required = {
+        "player_name",
+        "fantasy_pos",
+        "fantasy_points_ppr",
+        "vorp_star",
+        "vorp_star_rank_overall",
+        "vorp_star_rank_pos",
+    }
+    missing = [c for c in required if c not in table.columns]
+    if missing:
+        # Helpful error; you can also log table.columns here
+        raise HTTPException(
+            status_code=502,
+            detail=f"VORP table missing columns {missing}; available={list(table.columns)}",
+        )
+
+    # 3) Coerce dtypes and replace NaNs with safe defaults
+    import numpy as np
+    for col in ["fantasy_points_ppr", "vorp_star"]:
+        table[col] = pd.to_numeric(table[col], errors="coerce").fillna(0.0)
+
+    # ranks must be ints; coerce and drop rows that still fail
+    for col in ["vorp_star_rank_overall", "vorp_star_rank_pos"]:
+        table[col] = pd.to_numeric(table[col], errors="coerce")
+
+    # optional games played
+    if "g" in table.columns:
+        table["g"] = pd.to_numeric(table["g"], errors="coerce")
+    else:
+        table["g"] = np.nan
+
+    # 4) Drop rows that lack essential fields after coercion
+    table = table[
+        table["player_name"].notna()
+        & table["fantasy_pos"].notna()
+        & table["vorp_star"].notna()
+        & table["vorp_star_rank_overall"].notna()
+        & table["vorp_star_rank_pos"].notna()
+    ]
+
+    players: list[PlayerVorp] = []
+    # Use itertuples for speed and simple attribute access
+    for row in table.itertuples(index=False):
+        try:
+            players.append(
+                PlayerVorp(
+                    player_name=str(getattr(row, "player_name")),
+                    team=(
+                        None
+                        if pd.isna(getattr(row, "team", None))
+                        else str(getattr(row, "team", None))
+                    ),
+                    fantasy_pos=str(getattr(row, "fantasy_pos")),
+                    g=(
+                        None
+                        if pd.isna(getattr(row, "g"))
+                        else int(getattr(row, "g"))
+                    ),
+                    fantasy_points_ppr=float(getattr(row, "fantasy_points_ppr")),
+                    vorp_star=float(getattr(row, "vorp_star")),
+                    vorp_star_rank_overall=int(getattr(row, "vorp_star_rank_overall")),
+                    vorp_star_rank_pos=int(getattr(row, "vorp_star_rank_pos")),
+                )
+            )
+        except Exception as e:
+            # Skip any bad row rather than nuking the whole response
+            print(f"[vorp] skipped row due to serialization error: {e}")
+            continue
+
+    return VorpResponse(
+        year=year,
+        players=players,
+        count=len(players),
+        used_ppg=use_ppg,
+    )
+    
+    
+    
 
 if __name__ == "__main__":
     import uvicorn

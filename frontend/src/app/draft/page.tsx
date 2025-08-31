@@ -357,6 +357,13 @@ export default function DraftsPage() {
         >
           View Playoffs
         </a>
+        <a
+          href="/players"
+          className="text-sm md:text-base text-white/90 hover:text-white underline-offset-4 hover:underline"
+        >
+          Player VORP (all years)
+        </a>
+
       </nav>
     </div>
 

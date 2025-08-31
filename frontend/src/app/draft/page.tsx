@@ -568,7 +568,7 @@ function DraftBoard({
     const row = getRow(p);
     if (!row) return { isPartial: false, shadeHex: "#ffffff", value: undefined, g: undefined };
     const g = row.g ?? undefined;
-    const isPartial = typeof g === "number" && g >= 3 && g < 12 && row.vorp_star_extrap != null;
+    const isPartial = typeof g === "number" && g >= 3 && g < 14 && row.vorp_star_extrap != null;
     const value = isPartial ? (row.vorp_star_extrap as number) : row.vorp_star;
     const shadeHex = vorpToColor(value);
     return { isPartial, shadeHex, value, g };

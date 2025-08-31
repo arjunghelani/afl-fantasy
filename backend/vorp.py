@@ -82,7 +82,7 @@ def compute_vorp_star(
     teams: int = 12,
     starters_per_team: dict = None,
     use_ppg: bool = False,
-    min_games_for_ppg: int = 12,     # threshold for “full season”
+    min_games_for_ppg: int = 14,     # threshold for “full season”
     pool_factor: float = 2.0,
     winsor_limits: tuple = (0.02, 0.98),
 ):
@@ -217,7 +217,7 @@ def build_vorp_table(year:int, use_ppg:bool=False,
         teams=teams,
         starters_per_team=starters_per_team,
         use_ppg=use_ppg,           # your choice
-        min_games_for_ppg=12,
+        min_games_for_ppg=14,
         pool_factor=1,
         winsor_limits=(0.02, 0.98),
     )

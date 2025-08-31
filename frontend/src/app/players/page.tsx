@@ -5,11 +5,20 @@ import { useEffect, useMemo, useState } from "react";
 /* --------------------------- types --------------------------- */
 type PlayerRow = {
   player_name: string;
-  team?: string | null;           // NFL team
+  team?: string | null;
   fantasy_pos: string;
-  fantasy_points_ppr: number;
-  vorp_star: number;
-  year?: number;                  // added when aggregating "ALL"
+  fantasy_points_ppr?: number;
+  ppr_per_game?: number;       // NEW
+  g?: number;                  // NEW (from /metrics/vorp)
+  vorp_star?: number;
+  true_vorp_star?: number;
+  delta_vorp_star_mean?: number;
+  delta_vorp_star_p10?: number;
+  delta_vorp_star_p90?: number;
+  adj_vorp_star?: number;
+  weeks_played?: number;
+  missed_weeks?: number;
+  year?: number;
 };
 
 type VorpResponse = {
@@ -35,6 +44,30 @@ type DraftResponse = {
   picks: DraftPick[];
 };
 
+/* NEW: extrapolated API types */
+type ExtrapolatedRow = {
+  player_name: string;
+  team?: string | null;
+  fantasy_pos: string;
+  fantasy_points_ppr: number;  // NEW
+  ppr_per_game?: number;       // NEW
+  true_vorp_star: number;
+  delta_vorp_star_mean: number;
+  delta_vorp_star_p10: number;
+  delta_vorp_star_p90: number;
+  adj_vorp_star: number;
+  weeks_played?: number;
+  missed_weeks?: number;
+};
+
+type ExtrapolatedResponse = {
+  year: number;
+  sims: number;
+  weeks_in_season: int;
+  count: number;
+  rows: ExtrapolatedRow[];
+};
+
 /* -------------------------- config -------------------------- */
 const YEARS = [2020, 2021, 2022, 2024] as const;
 type YearChoice = (typeof YEARS)[number] | "ALL";
@@ -46,24 +79,21 @@ const TEAM_NAME_MAP: Record<number, string> = {
   2: "Conan",
   3: "Victor",
   4: "Evan",
-  5:"Logan",
-  6:"Jackson",
-  7:"Jon", 
-  8:"Dylan",
-  9:"Gavin",
-  10:"Arjun",
-  12:'Owen',
-  14:'Aidan'
-
-  // ... add the rest of your league
+  5: "Logan",
+  6: "Jackson",
+  7: "Jon",
+  8: "Dylan",
+  9: "Gavin",
+  10: "Arjun",
+  12: "Owen",
+  14: "Aidan",
+  // ...
 };
 
-// Names to exclude from WAR totals (exact match after ESPN -> your draftIndex)
+// Names to exclude from WAR totals
 const EXCLUDE_DRAFTER_NAMES = new Set<string>([
-  "Team Ned", // put the kicked team's old name here
+  "Team Ned",
 ]);
-
-
 
 /* ------------------------ helpers --------------------------- */
 const normalizeName = (raw: string) =>
@@ -72,20 +102,20 @@ const normalizeName = (raw: string) =>
     .toLowerCase()
     .normalize("NFD")
     .replace(/\p{Diacritic}/gu, "")
-    .replace(/[.'’`,\-]/g, " ")
+    .replace(/[.''`,\-]/g, " ")
     .replace(/\b(jr|sr|ii|iii|iv|v)\b/g, "")
     .replace(/\s+/g, " ")
     .trim();
 
 /* ------------------------ data fetchers ---------------------- */
-async function fetchVorp(year: number): Promise<VorpResponse> {
-  const res = await fetch(`${API_BASE}/metrics/vorp/${year}?top=500`, { cache: "no-store" });
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`VORP ${year} failed: ${res.status} ${res.statusText} ${body}`);
-  }
-  return res.json();
-}
+// async function fetchVorp(year: number): Promise<VorpResponse> {
+//   const res = await fetch(`${API_BASE}/metrics/vorp/${year}?top=500`, { cache: "no-store" });
+//   if (!res.ok) {
+//     const body = await res.text().catch(() => "");
+//     throw new Error(`VORP ${year} failed: ${res.status} ${res.statusText} ${body}`);
+//   }
+//   return res.json();
+// }
 
 async function fetchDraft(year: number): Promise<DraftResponse> {
   const res = await fetch(`${API_BASE}/draft/${year}`, { cache: "no-store" });
@@ -96,9 +126,62 @@ async function fetchDraft(year: number): Promise<DraftResponse> {
   return res.json();
 }
 
+// Helper to calculate optimal API limits based on filters
+function calculateOptimalLimit(positionFilter?: Set<string>, yearCount: number = 1): number {
+  const POS_LIMITS = { QB: 30, RB: 75, WR: 75, TE: 30 };
+  
+  if (!positionFilter || positionFilter.size === 4) {
+    // All positions: sum all position limits (30+75+75+30 = 210)
+    const totalPerYear = Object.values(POS_LIMITS).reduce((a, b) => a + b, 0);
+    return totalPerYear * yearCount;
+  } else {
+    // Specific positions: sum only selected
+    const totalPerYear = Array.from(positionFilter).reduce((sum, pos) => {
+      return sum + (POS_LIMITS[pos as keyof typeof POS_LIMITS] || 0);
+    }, 0);
+    return totalPerYear * yearCount;
+  }
+}
+
+/* NEW: extrapolated endpoint fetcher with dynamic limits */
+async function fetchExtrapolated(year: number, positionFilter?: Set<string>): Promise<ExtrapolatedResponse> {
+  // Calculate optimal limit based on position filter
+  const limit = calculateOptimalLimit(positionFilter, 1); // 1 year
+  
+  const params = new URLSearchParams({
+    sims: String(1000),
+    weeks_in_season: String(17),
+    limit: String(limit),
+    // Add position filter to API call if not all positions
+    ...(positionFilter && positionFilter.size < 4 ? { pos: Array.from(positionFilter).join(",") } : {}),
+  });
+  const res = await fetch(`${API_BASE}/metrics/war-extrapolated/${year}?${params.toString()}`, {
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`Extrapolated WAR ${year} failed: ${res.status} ${res.statusText} ${body}`);
+  }
+  return res.json();
+}
+
+async function fetchVorp(year: number, positionFilter?: Set<string>): Promise<VorpResponse> {
+  // Calculate optimal limit for regular VORP too
+  const limit = calculateOptimalLimit(positionFilter, 1); // 1 year
+  
+  const res = await fetch(`${API_BASE}/metrics/vorp/${year}?top=${limit}`, { cache: "no-store" });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`VORP ${year} failed: ${res.status} ${res.statusText} ${body}`);
+  }
+  return res.json();
+}
+
 /* --------------------------- page --------------------------- */
 export default function PlayersPage() {
   const [year, setYear] = useState<YearChoice>("ALL");
+  const [extrapolate, setExtrapolate] = useState(false); // NEW toggle
+
   const [data, setData] = useState<PlayerRow[]>([]);
   const [drafts, setDrafts] = useState<DraftResponse[]>([]);
   const [loading, setLoading] = useState(false);
@@ -115,12 +198,10 @@ export default function PlayersPage() {
       const next = new Set(prev);
       if (next.has(p)) next.delete(p);
       else next.add(p);
-      // never allow empty set; if empty, restore ALL
-      if (next.size === 0) return new Set(POS_ALL);
-      return next;
+      return next.size === 0 ? new Set(POS_ALL) : next;
     });
 
-  // fetch VORP + Draft data for selected year (or ALL)
+  // fetch players (season or extrapolated) + drafts
   useEffect(() => {
     let cancelled = false;
 
@@ -128,16 +209,74 @@ export default function PlayersPage() {
       setLoading(true);
       setError(null);
       try {
+        // Determine position filter for API calls
+        const positionFilter = posSet.size === POS_ALL.length ? undefined : posSet;
+        const yearCount = year === "ALL" ? YEARS.length : 1;
+        
         if (year === "ALL") {
-          const all = await Promise.all(YEARS.map(fetchVorp));
-          const rows = all.flatMap((r) =>
-            (r.players ?? []).map((p) => ({ ...p, year: r.year }))
-          );
-          if (!cancelled) setData(rows);
+          if (extrapolate) {
+            const all = await Promise.all(YEARS.map(y => fetchExtrapolated(y, positionFilter)));
+            const rows = all.flatMap((r) =>
+              (r.rows ?? []).map((p) => ({
+                // project into unified PlayerRow
+                player_name: p.player_name,
+                team: p.team ?? null,
+                fantasy_pos: p.fantasy_pos,
+                fantasy_points_ppr: p.fantasy_points_ppr,                                              // NEW
+                ppr_per_game: p.ppr_per_game ?? (p.weeks_played ? p.fantasy_points_ppr / p.weeks_played : undefined), // NEW
+                true_vorp_star: p.true_vorp_star,
+                delta_vorp_star_mean: p.delta_vorp_star_mean,
+                delta_vorp_star_p10: p.delta_vorp_star_p10,
+                delta_vorp_star_p90: p.delta_vorp_star_p90,
+                adj_vorp_star: p.adj_vorp_star,
+                weeks_played: p.weeks_played,
+                missed_weeks: p.missed_weeks,
+                year: r.year,
+              }))
+            );
+            if (!cancelled) setData(rows);
+          } else {
+            const all = await Promise.all(YEARS.map(y => fetchVorp(y, positionFilter)));
+            const rows = all.flatMap((r) =>
+              (r.players ?? []).map((p) => ({
+                ...p,
+                // compute PPG client-side from totals and games
+                ppr_per_game: p.fantasy_points_ppr && (p as any).g ? p.fantasy_points_ppr / (p as any).g : undefined, // NEW
+                year: r.year,
+              }))
+            );
+            if (!cancelled) setData(rows);
+          }
         } else {
-          const r = await fetchVorp(year);
-          const rows = (r.players ?? []).map((p) => ({ ...p, year: r.year }));
-          if (!cancelled) setData(rows);
+          if (extrapolate) {
+            const r = await fetchExtrapolated(year, positionFilter);
+            const rows = (r.rows ?? []).map((p) => ({
+              player_name: p.player_name,
+              team: p.team ?? null,
+              fantasy_pos: p.fantasy_pos,
+              fantasy_points_ppr: p.fantasy_points_ppr,            // NEW
+              ppr_per_game: p.ppr_per_game ?? (p.weeks_played ? p.fantasy_points_ppr / p.weeks_played : undefined), // NEW
+              true_vorp_star: p.true_vorp_star,
+              delta_vorp_star_mean: p.delta_vorp_star_mean,
+              delta_vorp_star_p10: p.delta_vorp_star_p10,
+              delta_vorp_star_p90: p.delta_vorp_star_p90,
+              adj_vorp_star: p.adj_vorp_star,
+              weeks_played: p.weeks_played,
+              missed_weeks: p.missed_weeks,
+              year: r.year,
+            }));
+
+            if (!cancelled) setData(rows);
+          } else {
+            const r = await fetchVorp(year, positionFilter);
+            const rows = (r.players ?? []).map((p) => ({
+              ...p,
+              // compute PPG client-side from totals and games
+              ppr_per_game: p.fantasy_points_ppr && (p as any).g ? p.fantasy_points_ppr / (p as any).g : undefined, // NEW
+              year: r.year,
+            }));
+            if (!cancelled) setData(rows);
+          }
         }
       } catch (e: any) {
         if (!cancelled) setError(e?.message || "Failed to load players");
@@ -158,8 +297,10 @@ export default function PlayersPage() {
           if (!cancelled) setDrafts([d]);
         }
       } catch (e: any) {
-        if (!cancelled) setDraftError(e?.message || "Failed to load draft data");
-        if (!cancelled) setDrafts([]);
+        if (!cancelled) {
+          setDraftError(e?.message || "Failed to load draft data");
+          setDrafts([]);
+        }
       } finally {
         if (!cancelled) setDraftLoading(false);
       }
@@ -170,7 +311,7 @@ export default function PlayersPage() {
     return () => {
       cancelled = true;
     };
-  }, [year]);
+  }, [year, extrapolate, posSet]); // NEW deps: extrapolate, posSet
 
   // (year|player) -> { team_id, drafter, round }
   const draftIndex = useMemo(() => {
@@ -186,60 +327,67 @@ export default function PlayersPage() {
     return m;
   }, [drafts]);
 
-
-  // apply filters (positions) and sort by true WAR desc
+  // apply filters and sort (by chosen WAR)
   const rows = useMemo(() => {
     const want = posSet;
     const r = data.filter((x) => want.has(x.fantasy_pos));
-    return r.sort((a, b) => (b.vorp_star ?? -Infinity) - (a.vorp_star ?? -Infinity));
-  }, [data, posSet]);
+    return r.sort((a, b) => {
+      let aWar: number;
+      let bWar: number;
+      
+      if (extrapolate) {
+        aWar = a.adj_vorp_star ?? a.true_vorp_star ?? 0;
+        bWar = b.adj_vorp_star ?? b.true_vorp_star ?? 0;
+      } else {
+        aWar = a.vorp_star ?? 0;
+        bWar = b.vorp_star ?? 0;
+      }
+      
+      return bWar - aWar;
+    });
+  }, [data, posSet, extrapolate]);
 
-  // Total WAR by team_id with late-round penalty floor (R1–8: full WAR, R9+: floor at –1)
-// Total WAR by team_id (R1–8 full; R9+ floor −1), showing ONLY mapped team_ids
-// Total WAR by team_id with late-round penalty halved (R1–8: full WAR, R9+: negatives halved)
-// Total WAR by team_id (R1–8 full; R9+ negatives halved) — ONLY show teams in TEAM_NAME_MAP
-const warTotalsByTeam = useMemo(() => {
-  const acc: Record<number, number> = {};
+  // Total WAR by team_id; if extrapolate, use adjusted WAR, else true WAR
+  const warTotalsByTeam = useMemo(() => {
+    const acc: Record<number, number> = {};
 
-  for (const r of rows) {
-    const y = r.year ?? 0;
-    if (!y) continue;
+    for (const r of rows) {
+      const y = r.year ?? 0;
+      if (!y) continue;
 
-    const di = draftIndex[`${y}|${normalizeName(r.player_name)}`];
-    if (!di) continue;
+      const di = draftIndex[`${y}|${normalizeName(r.player_name)}`];
+      if (!di) continue;
+      if (EXCLUDE_DRAFTER_NAMES.has(di.drafter)) continue;
 
-    // skip excluded drafters by historical name (if desired)
-    if (EXCLUDE_DRAFTER_NAMES.has(di.drafter)) continue;
+      let baseWar: number;
+      if (extrapolate) {
+        baseWar = r.adj_vorp_star ?? r.true_vorp_star ?? 0;
+      } else {
+        baseWar = r.vorp_star ?? 0;
+      }
 
-    const round = di.round ?? 99;
-    const v = typeof r.vorp_star === "number" ? r.vorp_star : 0;
+      const round = di.round ?? 99;
+      let effective = baseWar;
+      if (round >= 9 && baseWar < 0) {
+        effective = baseWar / 2;
+      }
 
-    let effective = v;
-    if (round >= 9 && v < 0) {
-      effective = v / 2; // halve late-round downside
+      acc[di.team_id] = (acc[di.team_id] ?? 0) + effective;
     }
 
-    acc[di.team_id] = (acc[di.team_id] ?? 0) + effective;
-  }
-
-  // Only include team_ids that you’ve mapped, and attach display name
-  return Object.entries(acc)
-    .filter(([id]) => TEAM_NAME_MAP[Number(id)] != null)
-    .map(([id, total]) => ({
-      team_id: Number(id),
-      display: TEAM_NAME_MAP[Number(id)]!, // safe due to filter
-      total,
-    }))
-    .sort((a, b) => b.total - a.total);
-}, [rows, draftIndex]);
-
-
-
-
+    return Object.entries(acc)
+      .filter(([id]) => TEAM_NAME_MAP[Number(id)] != null)
+      .map(([id, total]) => ({
+        team_id: Number(id),
+        display: TEAM_NAME_MAP[Number(id)]!,
+        total,
+      }))
+      .sort((a, b) => b.total - a.total);
+  }, [rows, draftIndex, extrapolate]);
 
   return (
     <main className="mx-auto max-w-5xl p-6 space-y-8 bg-slate-50 min-h-screen dark:bg-[#0b0f13]">
-      {/* Top bar: title + nav + controls */}
+      {/* Top bar */}
       <div className="rounded-xl bg-emerald-700 text-white px-4 py-3 flex items-center justify-between shadow-sm">
         <h1 className="text-2xl md:text-3xl font-bold tracking-tight">Players • WAR</h1>
 
@@ -275,29 +423,34 @@ const warTotalsByTeam = useMemo(() => {
             })}
           </div>
 
+          {/* NEW: Extrapolate injuries toggle */}
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="accent-white"
+              checked={extrapolate}
+              onChange={(e) => setExtrapolate(e.target.checked)}
+            />
+            <span className="text-white/90">Extrapolate injuries</span>
+          </label>
+
           {/* Nav */}
           <nav className="flex items-center gap-5">
-            <a
-              href="/"
-              className="text-sm md:text-base text-white/90 hover:text-white underline-offset-4 hover:underline"
-            >
+            <a href="/" className="text-sm md:text-base text-white/90 hover:text-white underline-offset-4 hover:underline">
               Standings
             </a>
-            <a
-              href="/draft"
-              className="text-sm md:text-base text-white/90 hover:text-white underline-offset-4 hover:underline"
-            >
+            <a href="/draft" className="text-sm md:text-base text-white/90 hover:text-white underline-offset-4 hover:underline">
               Drafts
             </a>
           </nav>
         </div>
       </div>
 
-      {/* WAR totals by drafter (R1–8 full; R9+ floored at –1) */}
+      {/* WAR totals by drafter */}
       <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-slate-900/80 p-4">
         <div className="flex items-center justify-between mb-2">
           <h2 className="text-lg font-semibold text-zinc-800 dark:text-zinc-100">
-            Total WAR by Drafter
+            Total {extrapolate ? "Adjusted WAR" : "WAR"} by Drafter
           </h2>
           <div className="flex items-center gap-2">
             {(loading || draftLoading) && (
@@ -311,13 +464,13 @@ const warTotalsByTeam = useMemo(() => {
           </div>
         </div>
 
-        <div className="overflow-auto rounded ring-1 ring-zinc-100 dark:ring-zinc-800 max-h-[30vh]">
+        <div className="rounded ring-1 ring-zinc-100 dark:ring-zinc-800 overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="sticky top-0 bg-emerald-600 text-white">
               <tr>
-                <th className="text-left p-2">#</th>   {/* new rank column */}
+                <th className="text-left p-2">#</th>
                 <th className="text-left p-2">Drafter</th>
-                <th className="text-right p-2">Total WAR</th>
+                <th className="text-right p-2">{extrapolate ? "Adjusted WAR" : "Total WAR"}</th>
               </tr>
             </thead>
             <tbody className="text-zinc-700 dark:text-zinc-200">
@@ -329,7 +482,7 @@ const warTotalsByTeam = useMemo(() => {
                       i % 2 === 1 ? "bg-slate-50/60 dark:bg-slate-800/40" : ""
                     }`}
                   >
-                    <td className="p-2 font-medium">{i + 1}</td> {/* rank 1..N */}
+                    <td className="p-2 font-medium">{i + 1}</td>
                     <td className="p-2">{row.display}</td>
                     <td className="p-2 text-right font-semibold text-emerald-700 dark:text-emerald-400">
                       {row.total.toFixed(2)}
@@ -345,106 +498,130 @@ const warTotalsByTeam = useMemo(() => {
               )}
             </tbody>
           </table>
-
         </div>
       </div>
 
-
-      {/* Players table — fills the screen first, scrolls inside */}
-        <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-slate-900/80 p-0 overflow-hidden">
-          {/* Header row inside card */}
-          <div className="flex items-center justify-between px-4 py-3">
-            <div className="flex items-center gap-3">
-              <h2 className="text-lg font-semibold text-zinc-800 dark:text-zinc-100">
-                {year === "ALL" ? "All Years" : year} •{" "}
-                {posSet.size === POS_ALL.length ? "All Positions" : Array.from(posSet).join(", ")}
-              </h2>
-              <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold bg-fuchsia-100 text-fuchsia-700 dark:bg-fuchsia-900/40 dark:text-fuchsia-300">
-                {rows.length} players
-              </span>
-            </div>
-
-            {/* Mobile pos multi-select (fallback) */}
-            <div className="sm:hidden">
-              <select
-                multiple
-                className="rounded-md bg-slate-100 dark:bg-slate-800 text-sm px-2 py-1"
-                value={Array.from(posSet)}
-                onChange={(e) => {
-                  const opts = Array.from(e.target.selectedOptions).map((o) => o.value);
-                  setPosSet(new Set(opts.length ? opts : POS_ALL));
-                }}
-              >
-                {POS_ALL.map((p) => (
-                  <option key={p} value={p}>
-                    {p}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          {/* Scroll area */}
-          <div className="h-[60vh] overflow-auto rounded-t-lg ring-1 ring-zinc-100 dark:ring-zinc-800">
-            <table className="w-full text-sm">
-              <thead className="sticky top-0 bg-emerald-600 text-white">
-                <tr>
-                  <th className="text-left p-2">Player</th>
-                  <th className="text-left p-2">Pos</th>
-                  <th className="text-left p-2">NFL Team</th>
-                  <th className="text-left p-2">Drafted By</th>
-                  <th className="text-right p-2">Rnd</th>
-                  <th className="text-right p-2">PPR Points</th>
-                  <th className="text-right p-2">WAR</th>
-                  <th className="text-right p-2">Year</th>
-                </tr>
-              </thead>
-              <tbody className="text-zinc-700 dark:text-zinc-200">
-                {rows.map((r, i) => {
-                  const y = r.year ?? 0;
-                  const d = y ? draftIndex[`${y}|${normalizeName(r.player_name)}`] : undefined;
-                  return (
-                    <tr
-                      key={`${r.player_name}-${r.year}-${i}`}
-                      className={`border-t border-zinc-200 dark:border-zinc-800 ${
-                        i % 2 === 1 ? "bg-slate-50/60 dark:bg-slate-800/40" : ""
-                      }`}
-                    >
-                      <td className="p-2">{r.player_name}</td>
-                      <td className="p-2">{r.fantasy_pos}</td>
-                      <td className="p-2">{r.team ?? "—"}</td>
-                      <td className="p-2">
-                        {d && TEAM_NAME_MAP[d.team_id] ? TEAM_NAME_MAP[d.team_id] : "—"}
-                      </td>
-                      <td className="p-2 text-right">{d?.round ?? "—"}</td>
-                      <td className="p-2 text-right">{(r.fantasy_points_ppr ?? 0).toFixed(1)}</td>
-                      <td className="p-2 text-right font-semibold text-emerald-700 dark:text-emerald-400">
-                        {typeof r.vorp_star === "number" ? r.vorp_star.toFixed(2) : "—"}
-                      </td>
-                      <td className="p-2 text-right">{r.year ?? "—"}</td>
-                    </tr>
-                  );
-                })}
-
-                {!loading && !error && rows.length === 0 && (
-                  <tr className="border-t border-zinc-200 dark:border-zinc-800">
-                    <td colSpan={8} className="p-4 text-center text-zinc-500 dark:text-zinc-400">
-                      No players match the current filters.
-                    </td>
-                  </tr>
-                )}
-                {(error || draftError) && (
-                  <tr className="border-t border-zinc-200 dark:border-zinc-800">
-                    <td colSpan={8} className="p-4 text-center text-zinc-500 dark:text-zinc-400">
-                      {error || draftError}
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+      {/* Players table */}
+      <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-slate-900/80 p-0 overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3">
+          <div className="flex items-center gap-3">
+            <h2 className="text-lg font-semibold text-zinc-800 dark:text-zinc-100">
+              {year === "ALL" ? "All Years" : year} •{" "}
+              {posSet.size === POS_ALL.length ? "All Positions" : Array.from(posSet).join(", ")}
+            </h2>
+            <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold bg-fuchsia-100 text-fuchsia-700 dark:bg-fuchsia-900/40 dark:text-fuchsia-300">
+              {rows.length} players
+            </span>
           </div>
         </div>
 
+        <div className="h-[60vh] md:h-[60vh] overflow-auto rounded-t-lg ring-1 ring-zinc-100 dark:ring-zinc-800">
+          <table className="w-full text-sm">
+            <thead className="sticky top-0 bg-emerald-600 text-white">
+              <tr>
+                <th className="text-left p-2">Player</th>
+                <th className="text-left p-2">Pos</th>
+                <th className="text-left p-2">NFL Team</th>
+                <th className="text-left p-2">Drafted By</th>
+                <th className="text-right p-2">Rnd</th>
+                {!extrapolate && (
+                  <>
+                    <th className="text-right p-2">PPR Points</th>
+                    <th className="text-right p-2">PPG</th> {/* NEW */}
+                    <th className="text-right p-2">WAR</th>
+                  </>
+                )}
+                {extrapolate && (
+                  <>
+                    <th className="text-right p-2">PPR Points</th> {/* NEW */}
+                    <th className="text-right p-2">PPG</th>         {/* NEW */}
+                    <th className="text-right p-2">True WAR</th>
+                    <th className="text-right p-2">Injury Δ (μ)</th>
+                    <th className="text-right p-2">Adj WAR</th>
+                    <th className="text-right p-2">Wks Played</th>
+                    <th className="text-right p-2">Wks Missed</th>
+                  </>
+                )}
+                <th className="text-right p-2">Year</th>
+              </tr>
+            </thead>
+            <tbody className="text-zinc-700 dark:text-zinc-200">
+              {rows.map((r, i) => {
+                const y = r.year ?? 0;
+                const d = y ? draftIndex[`${y}|${normalizeName(r.player_name)}`] : undefined;
+                return (
+                  <tr
+                    key={`${r.player_name}-${r.year}-${i}`}
+                    className={`border-t border-zinc-200 dark:border-zinc-800 ${
+                      i % 2 === 1 ? "bg-slate-50/60 dark:bg-slate-800/40" : ""
+                    }`}
+                  >
+                    <td className="p-2">{r.player_name}</td>
+                    <td className="p-2">{r.fantasy_pos}</td>
+                    <td className="p-2">{r.team ?? "—"}</td>
+                    <td className="p-2">{d && TEAM_NAME_MAP[d.team_id] ? TEAM_NAME_MAP[d.team_id] : "—"}</td>
+                    <td className="p-2 text-right">{d?.round ?? "—"}</td>
+
+                    {!extrapolate && (
+                      <>
+                        <td className="p-2 text-right">{(r.fantasy_points_ppr ?? 0).toFixed(1)}</td>
+                        <td className="p-2 text-right">
+                          {typeof r.ppr_per_game === "number" ? r.ppr_per_game.toFixed(2) : "—"}
+                        </td>
+                        <td className="p-2 text-right font-semibold text-emerald-700 dark:text-emerald-400">
+                          {typeof r.vorp_star === "number" ? r.vorp_star.toFixed(2) : "—"}
+                        </td>
+                      </>
+                    )}
+
+                    {extrapolate && (
+                      <>
+                        <td className="p-2 text-right">{(r.fantasy_points_ppr ?? 0).toFixed(1)}</td>
+                        <td className="p-2 text-right">
+                          {typeof r.ppr_per_game === "number" ? r.ppr_per_game.toFixed(2) : "—"}
+                        </td>
+                        <td className="p-2 text-right font-semibold text-emerald-700 dark:text-emerald-400">
+                          {typeof r.true_vorp_star === "number" ? r.true_vorp_star.toFixed(2) : "—"}
+                        </td>
+                        <td className="p-2 text-right">
+                          {typeof r.delta_vorp_star_mean === "number" ? 
+                            (r.delta_vorp_star_mean >= 0 ? "+" : "") + r.delta_vorp_star_mean.toFixed(2) : "—"}
+                        </td>
+                        <td className="p-2 text-right font-bold text-blue-700 dark:text-blue-400">
+                          {typeof r.adj_vorp_star === "number" ? r.adj_vorp_star.toFixed(2) : "—"}
+                        </td>
+                        <td className="p-2 text-right text-zinc-500">
+                          {typeof r.weeks_played === "number" ? r.weeks_played : "—"}
+                        </td>
+                        <td className="p-2 text-right text-zinc-500">
+                          {typeof r.missed_weeks === "number" ? r.missed_weeks : "—"}
+                        </td>
+                      </>
+                    )}
+
+                    <td className="p-2 text-right">{r.year ?? "—"}</td>
+                  </tr>
+                );
+              })}
+
+              {!loading && !error && rows.length === 0 && (
+                <tr className="border-t border-zinc-200 dark:border-zinc-800">
+                  <td colSpan={extrapolate ? 13 : 9} className="p-4 text-center text-zinc-500 dark:text-zinc-400">
+                    No players match the current filters.
+                  </td>
+                </tr>
+              )}
+              {(error || draftError) && (
+                <tr className="border-t border-zinc-200 dark:border-zinc-800">
+                  <td colSpan={extrapolate ? 13 : 9} className="p-4 text-center text-zinc-500 dark:text-zinc-400">
+                    {error || draftError}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </main>
   );
 }

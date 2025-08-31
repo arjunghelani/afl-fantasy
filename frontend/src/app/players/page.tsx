@@ -40,6 +40,31 @@ const YEARS = [2020, 2021, 2022, 2024] as const;
 type YearChoice = (typeof YEARS)[number] | "ALL";
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
 
+// Map team_id → display name (fill in with your own labels)
+const TEAM_NAME_MAP: Record<number, string> = {
+  1: "PJ",
+  2: "Conan",
+  3: "Victor",
+  4: "Evan",
+  5:"Logan",
+  6:"Jackson",
+  7:"Jon", 
+  8:"Dylan",
+  9:"Gavin",
+  10:"Arjun",
+  12:'Owen',
+  14:'Aidan'
+
+  // ... add the rest of your league
+};
+
+// Names to exclude from WAR totals (exact match after ESPN -> your draftIndex)
+const EXCLUDE_DRAFTER_NAMES = new Set<string>([
+  "Team Ned", // put the kicked team's old name here
+]);
+
+
+
 /* ------------------------ helpers --------------------------- */
 const normalizeName = (raw: string) =>
   raw
@@ -147,19 +172,20 @@ export default function PlayersPage() {
     };
   }, [year]);
 
-  // Build a quick lookup: (year|player) -> { drafter, round }
+  // (year|player) -> { team_id, drafter, round }
   const draftIndex = useMemo(() => {
-    const m: Record<string, { drafter: string; round: number }> = {};
+    const m: Record<string, { team_id: number; drafter: string; round: number }> = {};
     for (const d of drafts) {
       for (const p of d.picks ?? []) {
         if (!p.player_name) continue;
         const key = `${d.year}|${normalizeName(p.player_name)}`;
         const round = typeof p.round_num === "number" ? p.round_num : 99;
-        m[key] = { drafter: p.team_name, round };
+        m[key] = { team_id: p.team_id, drafter: p.team_name, round };
       }
     }
     return m;
   }, [drafts]);
+
 
   // apply filters (positions) and sort by true WAR desc
   const rows = useMemo(() => {
@@ -168,34 +194,46 @@ export default function PlayersPage() {
     return r.sort((a, b) => (b.vorp_star ?? -Infinity) - (a.vorp_star ?? -Infinity));
   }, [data, posSet]);
 
-  // Total WAR by drafter name with late-round penalty floor (R1–8: full WAR, R9+: floor at –1)
-  const warTotalsByDrafter = useMemo(() => {
-    const acc: Record<string, number> = {};
+  // Total WAR by team_id with late-round penalty floor (R1–8: full WAR, R9+: floor at –1)
+// Total WAR by team_id (R1–8 full; R9+ floor −1), showing ONLY mapped team_ids
+// Total WAR by team_id with late-round penalty halved (R1–8: full WAR, R9+: negatives halved)
+// Total WAR by team_id (R1–8 full; R9+ negatives halved) — ONLY show teams in TEAM_NAME_MAP
+const warTotalsByTeam = useMemo(() => {
+  const acc: Record<number, number> = {};
 
-    for (const r of rows) {
-      const y = r.year ?? 0;
-      if (!y) continue;
+  for (const r of rows) {
+    const y = r.year ?? 0;
+    if (!y) continue;
 
-      const di = draftIndex[`${y}|${normalizeName(r.player_name)}`];
-      if (!di) continue;
+    const di = draftIndex[`${y}|${normalizeName(r.player_name)}`];
+    if (!di) continue;
 
-      const round = di.round ?? 99;
-      const v = typeof r.vorp_star === "number" ? r.vorp_star : 0; // TRUE WAR ONLY
+    // skip excluded drafters by historical name (if desired)
+    if (EXCLUDE_DRAFTER_NAMES.has(di.drafter)) continue;
 
-      let effective = v;
-      if (round >= 9) {
-        // From round 9 on, floor downside at –1
-        effective = Math.max(v, -1.5);
-      }
+    const round = di.round ?? 99;
+    const v = typeof r.vorp_star === "number" ? r.vorp_star : 0;
 
-      const drafter = di.drafter ?? "—"; // use drafter name directly
-      acc[drafter] = (acc[drafter] ?? 0) + effective;
+    let effective = v;
+    if (round >= 9 && v < 0) {
+      effective = v / 2; // halve late-round downside
     }
 
-    return Object.entries(acc)
-      .map(([drafter, total]) => ({ drafter, total }))
-      .sort((a, b) => b.total - a.total);
-  }, [rows, draftIndex]);
+    acc[di.team_id] = (acc[di.team_id] ?? 0) + effective;
+  }
+
+  // Only include team_ids that you’ve mapped, and attach display name
+  return Object.entries(acc)
+    .filter(([id]) => TEAM_NAME_MAP[Number(id)] != null)
+    .map(([id, total]) => ({
+      team_id: Number(id),
+      display: TEAM_NAME_MAP[Number(id)]!, // safe due to filter
+      total,
+    }))
+    .sort((a, b) => b.total - a.total);
+}, [rows, draftIndex]);
+
+
 
 
 
@@ -277,20 +315,22 @@ export default function PlayersPage() {
           <table className="w-full text-sm">
             <thead className="sticky top-0 bg-emerald-600 text-white">
               <tr>
+                <th className="text-left p-2">#</th>   {/* new rank column */}
                 <th className="text-left p-2">Drafter</th>
                 <th className="text-right p-2">Total WAR</th>
               </tr>
             </thead>
             <tbody className="text-zinc-700 dark:text-zinc-200">
-              {warTotalsByDrafter.length > 0 ? (
-                warTotalsByDrafter.map((row, i) => (
+              {warTotalsByTeam.length > 0 ? (
+                warTotalsByTeam.map((row, i) => (
                   <tr
-                    key={`${row.drafter}-${i}`}
+                    key={row.team_id}
                     className={`border-t border-zinc-200 dark:border-zinc-800 ${
                       i % 2 === 1 ? "bg-slate-50/60 dark:bg-slate-800/40" : ""
                     }`}
                   >
-                    <td className="p-2">{row.drafter}</td>
+                    <td className="p-2 font-medium">{i + 1}</td> {/* rank 1..N */}
+                    <td className="p-2">{row.display}</td>
                     <td className="p-2 text-right font-semibold text-emerald-700 dark:text-emerald-400">
                       {row.total.toFixed(2)}
                     </td>
@@ -298,109 +338,113 @@ export default function PlayersPage() {
                 ))
               ) : (
                 <tr className="border-t border-zinc-200 dark:border-zinc-800">
-                  <td colSpan={2} className="p-3 text-center text-zinc-500 dark:text-zinc-400">
+                  <td colSpan={3} className="p-3 text-center text-zinc-500 dark:text-zinc-400">
                     {loading || draftLoading ? "Loading…" : "No data for current filters."}
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
+
         </div>
       </div>
 
 
       {/* Players table — fills the screen first, scrolls inside */}
-      <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-slate-900/80 p-0 overflow-hidden">
-        {/* Header row inside card */}
-        <div className="flex items-center justify-between px-4 py-3">
-          <div className="flex items-center gap-3">
-            <h2 className="text-lg font-semibold text-zinc-800 dark:text-zinc-100">
-              {year === "ALL" ? "All Years" : year} •{" "}
-              {posSet.size === POS_ALL.length ? "All Positions" : Array.from(posSet).join(", ")}
-            </h2>
-            <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold bg-fuchsia-100 text-fuchsia-700 dark:bg-fuchsia-900/40 dark:text-fuchsia-300">
-              {rows.length} players
-            </span>
+        <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-slate-900/80 p-0 overflow-hidden">
+          {/* Header row inside card */}
+          <div className="flex items-center justify-between px-4 py-3">
+            <div className="flex items-center gap-3">
+              <h2 className="text-lg font-semibold text-zinc-800 dark:text-zinc-100">
+                {year === "ALL" ? "All Years" : year} •{" "}
+                {posSet.size === POS_ALL.length ? "All Positions" : Array.from(posSet).join(", ")}
+              </h2>
+              <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold bg-fuchsia-100 text-fuchsia-700 dark:bg-fuchsia-900/40 dark:text-fuchsia-300">
+                {rows.length} players
+              </span>
+            </div>
+
+            {/* Mobile pos multi-select (fallback) */}
+            <div className="sm:hidden">
+              <select
+                multiple
+                className="rounded-md bg-slate-100 dark:bg-slate-800 text-sm px-2 py-1"
+                value={Array.from(posSet)}
+                onChange={(e) => {
+                  const opts = Array.from(e.target.selectedOptions).map((o) => o.value);
+                  setPosSet(new Set(opts.length ? opts : POS_ALL));
+                }}
+              >
+                {POS_ALL.map((p) => (
+                  <option key={p} value={p}>
+                    {p}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
 
-          {/* Mobile pos multi-select (fallback) */}
-          <div className="sm:hidden">
-            <select
-              multiple
-              className="rounded-md bg-slate-100 dark:bg-slate-800 text-sm px-2 py-1"
-              value={Array.from(posSet)}
-              onChange={(e) => {
-                const opts = Array.from(e.target.selectedOptions).map((o) => o.value);
-                setPosSet(new Set(opts.length ? opts : POS_ALL));
-              }}
-            >
-              {POS_ALL.map((p) => (
-                <option key={p} value={p}>
-                  {p}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
+          {/* Scroll area */}
+          <div className="h-[60vh] overflow-auto rounded-t-lg ring-1 ring-zinc-100 dark:ring-zinc-800">
+            <table className="w-full text-sm">
+              <thead className="sticky top-0 bg-emerald-600 text-white">
+                <tr>
+                  <th className="text-left p-2">Player</th>
+                  <th className="text-left p-2">Pos</th>
+                  <th className="text-left p-2">NFL Team</th>
+                  <th className="text-left p-2">Drafted By</th>
+                  <th className="text-right p-2">Rnd</th>
+                  <th className="text-right p-2">PPR Points</th>
+                  <th className="text-right p-2">WAR</th>
+                  <th className="text-right p-2">Year</th>
+                </tr>
+              </thead>
+              <tbody className="text-zinc-700 dark:text-zinc-200">
+                {rows.map((r, i) => {
+                  const y = r.year ?? 0;
+                  const d = y ? draftIndex[`${y}|${normalizeName(r.player_name)}`] : undefined;
+                  return (
+                    <tr
+                      key={`${r.player_name}-${r.year}-${i}`}
+                      className={`border-t border-zinc-200 dark:border-zinc-800 ${
+                        i % 2 === 1 ? "bg-slate-50/60 dark:bg-slate-800/40" : ""
+                      }`}
+                    >
+                      <td className="p-2">{r.player_name}</td>
+                      <td className="p-2">{r.fantasy_pos}</td>
+                      <td className="p-2">{r.team ?? "—"}</td>
+                      <td className="p-2">
+                        {d && TEAM_NAME_MAP[d.team_id] ? TEAM_NAME_MAP[d.team_id] : "—"}
+                      </td>
+                      <td className="p-2 text-right">{d?.round ?? "—"}</td>
+                      <td className="p-2 text-right">{(r.fantasy_points_ppr ?? 0).toFixed(1)}</td>
+                      <td className="p-2 text-right font-semibold text-emerald-700 dark:text-emerald-400">
+                        {typeof r.vorp_star === "number" ? r.vorp_star.toFixed(2) : "—"}
+                      </td>
+                      <td className="p-2 text-right">{r.year ?? "—"}</td>
+                    </tr>
+                  );
+                })}
 
-        {/* Scroll area */}
-        <div className="h-[60vh] overflow-auto rounded-t-lg ring-1 ring-zinc-100 dark:ring-zinc-800">
-          <table className="w-full text-sm">
-            <thead className="sticky top-0 bg-emerald-600 text-white">
-              <tr>
-                <th className="text-left p-2">Player</th>
-                <th className="text-left p-2">Pos</th>
-                <th className="text-left p-2">NFL Team</th>
-                <th className="text-left p-2">Drafted By</th>
-                <th className="text-right p-2">Rnd</th>
-                <th className="text-right p-2">PPR Points</th>
-                <th className="text-right p-2">WAR</th>
-                <th className="text-right p-2">Year</th>
-              </tr>
-            </thead>
-            <tbody className="text-zinc-700 dark:text-zinc-200">
-              {rows.map((r, i) => {
-                const y = r.year ?? 0;
-                const d = y ? draftIndex[`${y}|${normalizeName(r.player_name)}`] : undefined;
-                return (
-                  <tr
-                    key={`${r.player_name}-${r.year}-${i}`}
-                    className={`border-t border-zinc-200 dark:border-zinc-800 ${
-                      i % 2 === 1 ? "bg-slate-50/60 dark:bg-slate-800/40" : ""
-                    }`}
-                  >
-                    <td className="p-2">{r.player_name}</td>
-                    <td className="p-2">{r.fantasy_pos}</td>
-                    <td className="p-2">{r.team ?? "—"}</td>
-                    <td className="p-2">{d?.drafter ?? "—"}</td>
-                    <td className="p-2 text-right">{d?.round ?? "—"}</td>
-                    <td className="p-2 text-right">{(r.fantasy_points_ppr ?? 0).toFixed(1)}</td>
-                    <td className="p-2 text-right font-semibold text-emerald-700 dark:text-emerald-400">
-                      {typeof r.vorp_star === "number" ? r.vorp_star.toFixed(2) : "—"}
+                {!loading && !error && rows.length === 0 && (
+                  <tr className="border-t border-zinc-200 dark:border-zinc-800">
+                    <td colSpan={8} className="p-4 text-center text-zinc-500 dark:text-zinc-400">
+                      No players match the current filters.
                     </td>
-                    <td className="p-2 text-right">{r.year ?? "—"}</td>
                   </tr>
-                );
-              })}
-
-              {!loading && !error && rows.length === 0 && (
-                <tr className="border-t border-zinc-200 dark:border-zinc-800">
-                  <td colSpan={8} className="p-4 text-center text-zinc-500 dark:text-zinc-400">
-                    No players match the current filters.
-                  </td>
-                </tr>
-              )}
-              {(error || draftError) && (
-                <tr className="border-t border-zinc-200 dark:border-zinc-800">
-                  <td colSpan={8} className="p-4 text-center text-zinc-500 dark:text-zinc-400">
-                    {error || draftError}
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+                )}
+                {(error || draftError) && (
+                  <tr className="border-t border-zinc-200 dark:border-zinc-800">
+                    <td colSpan={8} className="p-4 text-center text-zinc-500 dark:text-zinc-400">
+                      {error || draftError}
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
-      </div>
+
     </main>
   );
 }

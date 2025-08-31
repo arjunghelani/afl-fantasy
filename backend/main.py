@@ -504,6 +504,7 @@ def get_draft(year: int) -> DraftResponse:
 
         is_keeper = bool(getattr(p, "keeper", False) or getattr(p, "keeper_status", False))
         auction_price = getattr(p, "auction_price", None)
+        
 
         picks_out.append(
             DraftPick(

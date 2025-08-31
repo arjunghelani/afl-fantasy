@@ -89,6 +89,8 @@ const REL_VERSION = 1; // bump when backend logic changes
 const relKeyFor = (year: number) => `${year}|w=${REL_WINDOW}|v=${REL_VERSION}`;
 
 
+
+
 /* ------------------------- helpers ------------------------- */
 const normalizeName = (raw: string) => {
   // more forgiving normalizer to improve name matching
@@ -361,7 +363,7 @@ export default function DraftsPage() {
           href="/players"
           className="text-sm md:text-base text-white/90 hover:text-white underline-offset-4 hover:underline"
         >
-          Player VORP (all years)
+          WAR Standings
         </a>
 
       </nav>
@@ -724,19 +726,18 @@ function DraftBoard({
                         </div>
                         <div className="flex items-center gap-1">
                           {showVBadge && (
-                                <span
-                                    className={`inline-flex rounded px-1 py-[1px] text-[9px] font-semibold ${
-                                    info.isPartial ? "bg-black/10 text-zinc-900" : "bg-black/15"
-                                    }`}
-                                    title={
-                                    info.isPartial
-                                        ? `WAR*17 (extrapolated): ${displayV!.toFixed(1)}`
-                                        : `WAR: ${displayV!.toFixed(1)}`
-                                    }
-                                >
-                                    {displayV!.toFixed(1)}
-                                </span>
+                              <span
+                                className={`inline-flex px-0 py-0 text-[11px] font-semibold leading-none ${textClass}`}
+                                title={
+                                  info.isPartial
+                                    ? `WAR*17 (extrapolated): ${displayV!.toFixed(1)}`
+                                    : `WAR: ${displayV!.toFixed(1)}`
+                                }
+                              >
+                                {displayV!.toFixed(1)}
+                              </span>
                             )}
+
 
                           {p.is_keeper && (
                             <span className="inline-flex rounded bg-black/10 px-1 py-[1px] text-[9px] font-semibold">

@@ -865,6 +865,116 @@ def get_war_extrapolated(
         rows=rows,
     )
 
+# ======================
+# NEW: Trades endpoint
+# ======================
+
+class TradeRow(BaseModel):
+    trade_week: int
+    player_name: str
+    player_id: int
+    from_team_name: str
+    to_team_name: str
+    tenure_weeks: int
+    weeks_with_data: int
+    total_vorp_star: float
+    avg_weekly_vorp_star: float
+    direction: str
+
+class TradeSummary(BaseModel):
+    trade_week: int
+    team_a: str
+    team_b: str
+    team_a_vorp_received: float
+    team_b_vorp_received: float
+    net_advantage: float
+    winner: str
+    players_to_a: str
+    players_to_b: str
+
+class TradesResponse(BaseModel):
+    year: int
+    trade_values: List[TradeRow]
+    trade_summary: List[TradeSummary]
+    count: int
+
+@app.get("/trades/{year}", response_model=TradesResponse)
+def get_trades(year: int):
+    """
+    Get trade analysis for a given year.
+    This endpoint runs the trade analysis logic from your test.ipynb
+    """
+    if year not in SUPPORTED_YEARS:
+        raise HTTPException(status_code=400, detail=f"Year {year} not supported. Supported: {sorted(SUPPORTED_YEARS)}")
+    
+    try:
+        # Import the trade analysis functions
+        from trade_analysis import run_trade_analysis
+        
+        # Run the actual trade analysis
+        trade_df, packages_by_week, player_meta, team_meta = run_trade_analysis(year)
+        
+        if trade_df.empty:
+            return TradesResponse(
+                year=year,
+                trade_values=[],
+                trade_summary=[],
+                count=0
+            )
+        
+        # Convert trade DataFrame to TradeRow objects
+        trade_values = []
+        for _, row in trade_df.iterrows():
+            trade_values.append(TradeRow(
+                trade_week=int(row['week']),
+                player_name=str(row['player_name']),
+                player_id=int(row['player_id']),
+                from_team_name=str(row['from_team_name']),
+                to_team_name=str(row['to_team_name']),
+                tenure_weeks=0,  # We'll calculate this if needed
+                weeks_with_data=0,  # We'll calculate this if needed
+                total_vorp_star=0.0,  # We'll calculate this if needed
+                avg_weekly_vorp_star=0.0,  # We'll calculate this if needed
+                direction=f"{row['from_team_name']} → {row['to_team_name']}"
+            ))
+        
+        # Create trade summary from packages
+        trade_summary = []
+        for week, packages in packages_by_week.items():
+            for pkg in packages:
+                if not pkg["is_trade_like"]:
+                    continue
+                    
+                team_a, team_b = pkg["teams"]
+                team_a_name = team_meta.get(team_a, {}).get("name", f"Team {team_a}")
+                team_b_name = team_meta.get(team_b, {}).get("name", f"Team {team_b}")
+                
+                # Get player names for each direction
+                players_to_a = [player_meta.get(pid, {}).get("name", str(pid)) for pid in pkg["b_to_a"]]
+                players_to_b = [player_meta.get(pid, {}).get("name", str(pid)) for pid in pkg["a_to_b"]]
+                
+                trade_summary.append(TradeSummary(
+                    trade_week=week,
+                    team_a=team_a_name,
+                    team_b=team_b_name,
+                    team_a_vorp_received=0.0,  # We'll calculate this if needed
+                    team_b_vorp_received=0.0,  # We'll calculate this if needed
+                    net_advantage=0.0,  # We'll calculate this if needed
+                    winner="Tie",  # We'll calculate this if needed
+                    players_to_a=", ".join(players_to_a) if players_to_a else "None",
+                    players_to_b=", ".join(players_to_b) if players_to_b else "None"
+                ))
+        
+        return TradesResponse(
+            year=year,
+            trade_values=trade_values,
+            trade_summary=trade_summary,
+            count=len(trade_values)
+        )
+        
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Failed to analyze trades: {e}")
+
 
 # Uvicorn
 # ======================

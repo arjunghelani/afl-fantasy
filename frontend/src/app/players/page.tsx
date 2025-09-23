@@ -439,9 +439,12 @@ export default function PlayersPage() {
             <a href="/" className="text-sm md:text-base text-white/90 hover:text-white underline-offset-4 hover:underline">
               Standings
             </a>
-            <a href="/trades" className="text-sm md:text-base text-white/90 hover:text-white underline-offset-4 hover:underline">
-              Trades
-            </a>
+        <a href="/trades" className="text-sm md:text-base text-white/90 hover:text-white underline-offset-4 hover:underline">
+          Trades
+        </a>
+        <a href="/scoreboard" className="text-sm md:text-base text-white/90 hover:text-white underline-offset-4 hover:underline">
+          Scoreboard
+        </a>
             <a href="/draft" className="text-sm md:text-base text-white/90 hover:text-white underline-offset-4 hover:underline">
               Drafts
             </a>

@@ -10,6 +10,7 @@ import re
 import json
 from pathlib import Path
 from collections import Counter, defaultdict
+from datetime import datetime, timedelta
 
 
 from vorp import build_vorp_table, build_linear_extrapolated_table
@@ -493,6 +494,7 @@ def get_draft(year: int) -> DraftResponse:
 
 # NEW: load weekly points for simulation (expects standard columns)
 def load_weekly_points(year: int) -> pd.DataFrame:
+    
     """
     Try file first, then fallback to ESPN Player.stats if not found.
     """
@@ -608,6 +610,8 @@ def _map_pos(p: str) -> str:
     if p.startswith("WR"): return "WR"
     if p.startswith("TE"): return "TE"
     return ""  # filtered out later
+
+
 
 def build_weekly_points_from_espn(year: int) -> pd.DataFrame:
     """
@@ -869,17 +873,16 @@ def get_war_extrapolated(
 # NEW: Trades endpoint
 # ======================
 
-class TradeRow(BaseModel):
-    trade_week: int
-    player_name: str
-    player_id: int
-    from_team_name: str
-    to_team_name: str
-    tenure_weeks: int
-    weeks_with_data: int
-    total_vorp_star: float
-    avg_weekly_vorp_star: float
-    direction: str
+class TradePackage(BaseModel):
+    week: int
+    team1_id: int
+    team1_name: str
+    team2_id: int
+    team2_name: str
+    team1_players: List[str]
+    team2_players: List[str]
+    total_players: int
+    is_trade_like: bool
 
 class TradeSummary(BaseModel):
     trade_week: int
@@ -894,9 +897,55 @@ class TradeSummary(BaseModel):
 
 class TradesResponse(BaseModel):
     year: int
-    trade_values: List[TradeRow]
+    trade_packages: List[TradePackage]
     trade_summary: List[TradeSummary]
     count: int
+
+# NEW: Scoreboard models
+class GameResult(BaseModel):
+    week: int
+    opponent: str
+    score: float
+    opponent_score: float
+    result: str  # "W" or "L"
+    margin: float
+    is_playoff: bool = False
+    matchup_type: str = "NONE"
+
+class TeamScoreboard(BaseModel):
+    team_name: str
+    wins: int
+    losses: int
+    total_points: float
+    win_percentage: float
+    games: List[GameResult]
+
+class ScoreboardResponse(BaseModel):
+    year: int
+    teams: List[TeamScoreboard]
+
+# NEW: Matchup detail models
+class PlayerScore(BaseModel):
+    player_name: str
+    position: str
+    points: float
+    projected_points: float
+
+class TeamRoster(BaseModel):
+    team_name: str
+    total_score: float
+    players: List[PlayerScore]
+
+class MatchupDetail(BaseModel):
+    year: int
+    week: int
+    home_team: TeamRoster
+    away_team: TeamRoster
+    is_playoff: bool
+
+# Simple in-memory cache for trades data
+_trades_cache = {}
+_cache_timestamps = {}
 
 @app.get("/trades/{year}", response_model=TradesResponse)
 def get_trades(year: int):
@@ -907,36 +956,134 @@ def get_trades(year: int):
     if year not in SUPPORTED_YEARS:
         raise HTTPException(status_code=400, detail=f"Year {year} not supported. Supported: {sorted(SUPPORTED_YEARS)}")
     
+    # Check cache first (cache for 1 hour)
+    cache_key = f"trades_{year}"
+    if cache_key in _trades_cache:
+        cache_time = _cache_timestamps.get(cache_key)
+        if cache_time and datetime.now() - cache_time < timedelta(hours=1):
+            return _trades_cache[cache_key]
+    
     try:
         # Import the trade analysis functions
-        from trade_analysis import run_trade_analysis
+        from trade_analysis import run_trade_analysis, get_league, get_team_map
         
-        # Run the actual trade analysis
+        # Try to get basic trade data first (faster)
+        try:
+            from trade_analysis import get_league, get_team_map, build_ownership_timeseries, detect_transfers, cluster_trades, guess_max_week
+            
+            league = get_league(year)
+            team_meta = get_team_map(league)
+            
+            # Use the proper trade clustering logic from test.ipynb
+            weeks = range(1, guess_max_week(league) + 1)
+            owner_by_player, player_meta, team_meta = build_ownership_timeseries(league, weeks)
+            changes = detect_transfers(owner_by_player, weeks)
+            packages_by_week = cluster_trades(changes, min_players_total=2)
+            
+            if not packages_by_week:
+                return TradesResponse(
+                    year=year,
+                    trade_packages=[],
+                    trade_summary=[],
+                    count=0
+                )
+            
+            # Convert packages to trade packages
+            trade_packages = []
+            trade_summary = []
+            
+            for week, packages in packages_by_week.items():
+                for pkg in packages:
+                    if not pkg["is_trade_like"]:
+                        continue
+                        
+                    team_a, team_b = pkg["teams"]
+                    team_a_name = team_meta.get(team_a, {}).get("name", f"Team {team_a}")
+                    team_b_name = team_meta.get(team_b, {}).get("name", f"Team {team_b}")
+                    
+                    # Get player names for each direction
+                    team_a_players = [player_meta.get(pid, {}).get("name", str(pid)) for pid in pkg["a_to_b"]]
+                    team_b_players = [player_meta.get(pid, {}).get("name", str(pid)) for pid in pkg["b_to_a"]]
+                    
+                    trade_packages.append(TradePackage(
+                        week=week,
+                        team1_id=team_a,
+                        team1_name=team_a_name,
+                        team2_id=team_b,
+                        team2_name=team_b_name,
+                        team1_players=team_a_players,
+                        team2_players=team_b_players,
+                        total_players=len(team_a_players) + len(team_b_players),
+                        is_trade_like=pkg["is_trade_like"]
+                    ))
+                    
+                    trade_summary.append(TradeSummary(
+                        trade_week=week,
+                        team_a=team_a_name,
+                        team_b=team_b_name,
+                        team_a_vorp_received=0.0,
+                        team_b_vorp_received=0.0,
+                        net_advantage=0.0,
+                        winner="Tie",
+                        players_to_a=", ".join(team_b_players),
+                        players_to_b=", ".join(team_a_players)
+                    ))
+            
+            result = TradesResponse(
+                year=year,
+                trade_packages=trade_packages,
+                trade_summary=trade_summary,
+                count=len(trade_packages)
+            )
+            
+            # Cache the result
+            _trades_cache[cache_key] = result
+            _cache_timestamps[cache_key] = datetime.now()
+            
+            return result
+            
+        except Exception as e:
+            # Fallback to full analysis if basic method fails
+            print(f"Basic trade analysis failed: {e}, falling back to full analysis")
+            pass
+        
+        # Run the full trade analysis as fallback
         trade_df, packages_by_week, player_meta, team_meta = run_trade_analysis(year)
         
         if trade_df.empty:
             return TradesResponse(
                 year=year,
-                trade_values=[],
+                trade_packages=[],
                 trade_summary=[],
                 count=0
             )
         
-        # Convert trade DataFrame to TradeRow objects
-        trade_values = []
-        for _, row in trade_df.iterrows():
-            trade_values.append(TradeRow(
-                trade_week=int(row['week']),
-                player_name=str(row['player_name']),
-                player_id=int(row['player_id']),
-                from_team_name=str(row['from_team_name']),
-                to_team_name=str(row['to_team_name']),
-                tenure_weeks=0,  # We'll calculate this if needed
-                weeks_with_data=0,  # We'll calculate this if needed
-                total_vorp_star=0.0,  # We'll calculate this if needed
-                avg_weekly_vorp_star=0.0,  # We'll calculate this if needed
-                direction=f"{row['from_team_name']} → {row['to_team_name']}"
-            ))
+        # Convert packages to TradePackage objects
+        trade_packages = []
+        for week, packages in packages_by_week.items():
+            for pkg in packages:
+                if not pkg["is_trade_like"]:
+                    continue
+                    
+                team_a, team_b = pkg["teams"]
+                team_a_name = team_meta.get(team_a, {}).get("name", f"Team {team_a}")
+                team_b_name = team_meta.get(team_b, {}).get("name", f"Team {team_b}")
+                
+                # Get player names for each team
+                team_a_players = [player_meta.get(pid, {}).get("name", str(pid)) for pid in pkg["a_to_b"]]
+                team_b_players = [player_meta.get(pid, {}).get("name", str(pid)) for pid in pkg["b_to_a"]]
+                
+                trade_packages.append(TradePackage(
+                    week=week,
+                    team1_id=team_a,
+                    team1_name=team_a_name,
+                    team2_id=team_b,
+                    team2_name=team_b_name,
+                    team1_players=team_a_players,
+                    team2_players=team_b_players,
+                    total_players=len(team_a_players) + len(team_b_players),
+                    is_trade_like=pkg["is_trade_like"]
+                ))
         
         # Create trade summary from packages
         trade_summary = []
@@ -965,15 +1112,286 @@ def get_trades(year: int):
                     players_to_b=", ".join(players_to_b) if players_to_b else "None"
                 ))
         
-        return TradesResponse(
+        result = TradesResponse(
             year=year,
-            trade_values=trade_values,
+            trade_packages=trade_packages,
             trade_summary=trade_summary,
-            count=len(trade_values)
+            count=len(trade_packages)
         )
+        
+        # Cache the result
+        _trades_cache[cache_key] = result
+        _cache_timestamps[cache_key] = datetime.now()
+        
+        return result
         
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Failed to analyze trades: {e}")
+
+@app.get("/scoreboard/{year}", response_model=ScoreboardResponse)
+def get_scoreboard(year: int):
+    """
+    Get historical scoreboard data for a given year.
+    Returns team records and game-by-game results.
+    """
+    if year not in SUPPORTED_YEARS:
+        raise HTTPException(status_code=400, detail=f"Year {year} not supported. Supported: {sorted(SUPPORTED_YEARS)}")
+    
+    try:
+        from trade_analysis import get_league, guess_max_week
+        
+        league = get_league(year)
+        max_week = guess_max_week(league)
+        
+        # Get team data
+        teams_data = {}
+        for team in league.teams:
+            if type(team) != int:
+                teams_data[team.team_id] = {
+                    'name': team.team_name,
+                    'games': [],
+                    'wins': 0,
+                    'losses': 0,
+                    'total_points': 0.0
+                }
+        
+        # Process each week's games
+        for week in range(1, max_week + 1):
+            try:
+                box_scores = league.box_scores(week=week)
+                for box in box_scores:
+                    # Include both regular season and playoff games
+                    # if hasattr(box, 'is_playoff') and box.is_playoff:
+                    #     continue
+                    home_team = box.home_team
+                    away_team = box.away_team
+                    home_score = box.home_score
+                    away_score = box.away_score
+                    
+                    # Determine winner and loser
+                    if type(home_team) != int and type(away_team) != int:
+                        if home_score > away_score:
+                            winner_id = home_team.team_id
+                            loser_id = away_team.team_id
+                            home_result = "W"
+                            away_result = "L"
+                        else:
+                            winner_id = away_team.team_id
+                            loser_id = home_team.team_id
+                            home_result = "L"
+                            away_result = "W"
+                        
+                        # Add game data for home team
+                        if home_team.team_id in teams_data:
+                            is_playoff = getattr(box, 'is_playoff', False)
+                            game_data = {
+                                'week': week,
+                                'opponent': away_team.team_name,
+                                'score': home_score,
+                                'opponent_score': away_score,
+                                'result': home_result,
+                                'margin': abs(home_score - away_score),
+                                'is_playoff': is_playoff,
+                                'matchup_type': getattr(box, 'matchup_type', 'NONE')
+                            }
+                            teams_data[home_team.team_id]['games'].append(game_data)
+                            
+                            # Only count wins/losses and points for regular season games (week 14 and before)
+                            if not is_playoff and week <= 14:
+                                teams_data[home_team.team_id]['total_points'] += home_score
+                                if home_result == "W":
+                                    teams_data[home_team.team_id]['wins'] += 1
+                                else:
+                                    teams_data[home_team.team_id]['losses'] += 1
+                        
+                        # Add game data for away team
+                        if away_team.team_id in teams_data:
+                            is_playoff = getattr(box, 'is_playoff', False)
+                            game_data = {
+                                'week': week,
+                                'opponent': home_team.team_name,
+                                'score': away_score,
+                                'opponent_score': home_score,
+                                'result': away_result,
+                                'margin': abs(away_score - home_score),
+                                'is_playoff': is_playoff,
+                                'matchup_type': getattr(box, 'matchup_type', 'NONE')
+                            }
+                            teams_data[away_team.team_id]['games'].append(game_data)
+                            
+                            # Only count wins/losses and points for regular season games (week 14 and before)
+                            if not is_playoff and week <= 14:
+                                teams_data[away_team.team_id]['total_points'] += away_score
+                                if away_result == "W":
+                                    teams_data[away_team.team_id]['wins'] += 1
+                                else:
+                                    teams_data[away_team.team_id]['losses'] += 1
+                            
+            except Exception as e:
+                print(f"Error processing week {week}: {e}")
+                continue
+        
+        # Convert to response format
+        teams = []
+        for team_id, data in teams_data.items():
+            total_games = data['wins'] + data['losses']
+            win_percentage = (data['wins'] / total_games * 100) if total_games > 0 else 0.0
+            
+            # Sort games by week
+            games_sorted = sorted(data['games'], key=lambda x: x['week'])
+            
+            teams.append(TeamScoreboard(
+                team_name=data['name'],
+                wins=data['wins'],
+                losses=data['losses'],
+                total_points=round(data['total_points'], 1),
+                win_percentage=round(win_percentage, 1),
+                games=[GameResult(**game) for game in games_sorted]
+            ))
+        
+        # Sort teams by win percentage (descending)
+        teams.sort(key=lambda x: x.win_percentage, reverse=True)
+        
+        return ScoreboardResponse(year=year, teams=teams)
+        
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Failed to get scoreboard: {e}")
+
+@app.get("/matchup/{year}/{week}", response_model=MatchupDetail)
+def get_matchup_detail(year: int, week: int, team1: str = None, team2: str = None):
+    """
+    Get detailed matchup information for a specific week and year.
+    Returns roster details, player scores, and matchup info.
+    
+    Args:
+        year: The season year
+        week: The week number
+        team1: First team name (optional, for specific matchup)
+        team2: Second team name (optional, for specific matchup)
+    """
+    if year not in SUPPORTED_YEARS:
+        raise HTTPException(status_code=400, detail=f"Year {year} not supported. Supported: {sorted(SUPPORTED_YEARS)}")
+    
+    try:
+        from trade_analysis import get_league
+        
+        league = get_league(year)
+        
+        # Get box scores for the specific week
+        box_scores = league.box_scores(week=week)
+        
+        if not box_scores:
+            raise HTTPException(status_code=404, detail=f"No matchup found for week {week} in {year}")
+        
+        # Find the specific matchup if team names are provided
+        box = None
+        if team1 and team2:
+            # Look for matchup between the two specific teams
+            for b in box_scores:
+                home_name = b.home_team.team_name
+                away_name = b.away_team.team_name
+                if ((home_name == team1 and away_name == team2) or 
+                    (home_name == team2 and away_name == team1)):
+                    box = b
+                    break
+        else:
+            # Fall back to first matchup if no team names specified
+            box = box_scores[0]
+        
+        if not box:
+            raise HTTPException(status_code=404, detail=f"Matchup between {team1} and {team2} not found for week {week} in {year}")
+        
+        # Skip if it's a playoff game
+        if hasattr(box, 'is_playoff') and box.is_playoff:
+            raise HTTPException(status_code=404, detail=f"Playoff game not available")
+        
+        def process_team_roster(lineup):
+            """Process team roster and separate starters from bench"""
+            starters = []
+            bench = []
+            
+            if not lineup:
+                return starters, bench
+                
+            for player in lineup:
+                player_points = getattr(player, 'points', 0.0)
+                player_slot = getattr(player, 'slot_position', '')
+                player_name = getattr(player, 'name', 'Unknown')
+                player_position = getattr(player, 'position', 'Unknown')
+                projected_points = getattr(player, 'projected_points', 0.0)
+                
+                # Use "FLEX" for flex position instead of actual position
+                display_position = "FLEX" if player_slot == "FLEX" else player_position
+                
+                player_data = PlayerScore(
+                    player_name=player_name,
+                    position=player_slot,
+                    points=player_points,
+                    projected_points=projected_points
+                )
+                
+                # Check if it's a starter or bench player
+                if player_slot in ['QB', 'RB', 'WR', 'TE', 'FLEX', 'K', 'D/ST']:
+                    starters.append((player_slot, player_data))
+                elif player_slot in ['BE', 'IR']:
+                    bench.append(player_data)
+                # If slot_position is empty or unclear, check if they scored points
+                elif player_points > 0:
+                    # Likely a starter if they scored points
+                    starters.append((player_slot or 'UNKNOWN', player_data))
+                else:
+                    # Likely bench if no points
+                    bench.append(player_data)
+            
+            # Sort starters by position order
+            position_order = ['QB', 'RB', 'WR', 'TE', 'FLEX', 'K', 'D/ST']
+            def sort_key(item):
+                slot, player = item
+                try:
+                    return position_order.index(slot)
+                except ValueError:
+                    return 999  # Put unknown positions at the end
+            
+            starters.sort(key=sort_key)
+            
+            # Extract just the player data in order
+            ordered_starters = [player for _, player in starters]
+            
+            return ordered_starters, bench
+        
+        # Process both team rosters
+        home_starters, home_bench = process_team_roster(box.home_lineup if hasattr(box, 'home_lineup') else None)
+        away_starters, away_bench = process_team_roster(box.away_lineup if hasattr(box, 'away_lineup') else None)
+        
+        # Combine starters and bench for each team
+        home_players = home_starters# + home_bench
+        away_players = away_starters# + away_bench
+        
+        # Create team rosters
+        home_team = TeamRoster(
+            team_name=box.home_team.team_name,
+            total_score=box.home_score,
+            players=home_players
+        )
+        
+        away_team = TeamRoster(
+            team_name=box.away_team.team_name,
+            total_score=box.away_score,
+            players=away_players
+        )
+        
+        return MatchupDetail(
+            year=year,
+            week=week,
+            home_team=home_team,
+            away_team=away_team,
+            is_playoff=getattr(box, 'is_playoff', False)
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Failed to get matchup details: {e}")
 
 
 # Uvicorn

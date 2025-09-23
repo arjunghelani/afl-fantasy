@@ -160,6 +160,7 @@ def cluster_trades(changes: List[Dict], min_players_total: int = 2) -> Dict:
             })
     return result
 
+# UNUSED FUNCTION - Commented out as not used in main.py
 def build_trade_dataframe(league: League, start_week: int = 1, end_week: Optional[int] = None, only_trade_like: bool = False) -> pd.DataFrame:
     """
     Returns a pandas DataFrame with one row per detected ownership change.

@@ -608,6 +608,10 @@ export default function ScoreboardPage() {
                       W{week}
                     </th>
                   ))}
+                  {/* Separator header */}
+                  <th className="px-1 py-3 text-center relative">
+                    <div className="absolute left-1/2 top-0 bottom-0 w-px bg-gray-300 dark:bg-gray-600 transform -translate-x-1/2"></div>
+                  </th>
                   {/* Playoff Weeks */}
                   {getPlayoffWeeks().map(week => (
                     <th key={`playoff-${week}`} className="px-2 py-3 text-center text-sm font-medium text-gray-900 dark:text-white min-w-[60px]">
@@ -659,6 +663,10 @@ export default function ScoreboardPage() {
                         </td>
                       );
                     })}
+                    {/* Separator between regular season and playoffs */}
+                    <td className="px-1 py-3 text-center relative">
+                      <div className="absolute left-1/2 top-0 bottom-0 w-px bg-gray-300 dark:bg-gray-600 transform -translate-x-1/2"></div>
+                    </td>
                     {/* Playoff Games */}
                     {getPlayoffWeeks().map(week => {
                       const game = getGameForWeek(team, week);

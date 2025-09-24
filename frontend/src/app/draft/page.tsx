@@ -31,7 +31,7 @@ type VorpRow = {
   g?: number | null;
   fantasy_points_ppr: number;
   vorp_star: number;
-  vorp_star_extrap?: number | null;   // may be absent on weekly-sum variant
+  vorp_star_extrap?: number | null;
   partial_season?: boolean | null;    // optional
   vorp_star_rank_overall: number;
   vorp_star_rank_pos: number;
@@ -157,22 +157,6 @@ async function fetchVorpMap(year: number): Promise<VorpMap> {
   return map;
 }
 
-/* --- NEW: weekly-summed VORP map --- */
-async function fetchVorpMapWeekly(year: number): Promise<VorpMap> {
-  const res = await fetch(`${API_BASE}/metrics/vorp-from-weekly/${year}?weeks_in_season=14&top=2000`, { cache: "no-store" });
-  if (!res.ok) throw new Error(`VORP* weekly ${year} failed: ${res.status} ${res.statusText}`);
-  const json: VorpResponse = await res.json();
-  const map: VorpMap = {};
-  for (const p of json.players) {
-    map[normalizeName(p.player_name)] = {
-      vorp_star: p.vorp_star,         // same key as season
-      vorp_star_extrap: null,         // weekly has no extrap
-      fantasy_pos: p.fantasy_pos,
-      g: p.g ?? null,
-    };
-  }
-  return map;
-}
 
 
 /* ---- relative (smoothed) payload ---- */
@@ -188,7 +172,7 @@ async function fetchVorpRelative(year: number, window = 7): Promise<VorpRelative
 /* ===============================================================
    PAGE
    =============================================================== */
-type ColorMode = "position" | "vorp" | "vorp_weekly" | "vorp_rel";
+type ColorMode = "position" | "vorp" | "vorp_rel";
 
 export default function DraftsPage() {
   const [year, setYear] = useState<number>(YEARS[0]);
@@ -207,11 +191,6 @@ export default function DraftsPage() {
   const [vorpCache, setVorpCache] = useState<Record<number, VorpMap | undefined>>({});
   const vorpMapSeason = vorpCache[year];
 
-  // NEW: VORP* (weekly-summed) state
-  const [vorpWeeklyLoading, setVorpWeeklyLoading] = useState(false);
-  const [vorpWeeklyError, setVorpWeeklyError] = useState<string | null>(null);
-  const [vorpWeeklyCache, setVorpWeeklyCache] = useState<Record<number, VorpMap | undefined>>({});
-  const vorpMapWeekly = vorpWeeklyCache[year];
 
   // relative baseline state
   const [relLoading, setRelLoading] = useState(false);
@@ -282,22 +261,6 @@ export default function DraftsPage() {
     setColorMode("vorp");
   };
 
-  const switchToVorpWeekly = async () => {
-    setVorpWeeklyError(null);
-    if (!vorpWeeklyCache[year]) {
-      try {
-        setVorpWeeklyLoading(true);
-        const map = await fetchVorpMapWeekly(year);
-        setVorpWeeklyCache((prev) => ({ ...prev, [year]: map }));
-      } catch (e) {
-        setVorpWeeklyError(e instanceof Error ? e.message : String(e));
-        return;
-      } finally {
-        setVorpWeeklyLoading(false);
-      }
-    }
-    setColorMode("vorp_weekly");
-  };
 
   const switchToVorpRel = async () => {
     setRelError(null);
@@ -318,7 +281,6 @@ export default function DraftsPage() {
 
   // pick active VORP map based on mode
   const activeVorpMap: VorpMap | undefined =
-    colorMode === "vorp_weekly" ? vorpMapWeekly :
     colorMode === "vorp" ? vorpMapSeason :
     undefined;
 
@@ -346,137 +308,139 @@ export default function DraftsPage() {
 
 
   return (
-    <main className="mx-auto max-w-none p-6 space-y-8 bg-slate-50 min-h-screen dark:bg-[#0b0f13]">
-      {/* Top bar */}
-      <div className="rounded-xl bg-emerald-700 text-white px-4 py-3 flex items-center justify-between shadow-sm">
-        <h1 className="text-2xl md:text-3xl font-bold tracking-tight">
-          League 86952922 Drafts
-        </h1>
-
-        <nav className="flex items-center gap-5">
-          <a href="/" className="text-sm md:text-base text-white/90 hover:text-white underline-offset-4 hover:underline">View Standings</a>
-          <a href="/playoffs" className="text-sm md:text-base text-white/90 hover:text-white underline-offset-4 hover:underline">View Playoffs</a>
-          <a href="/players" className="text-sm md:text-base text-white/90 hover:text-white underline-offset-4 hover:underline">WAR Standings</a>
-        </nav>
-      </div>
-
-      {/* Controls card */}
-      <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-slate-900/80 p-0">
-        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-          <div className="text-lg font-semibold text-zinc-800 dark:text-zinc-100">Draft Controls</div>
-
-          <div className="flex flex-wrap items-center gap-3">
-            {/* Year */}
-            <label className="text-sm text-zinc-600 dark:text-zinc-300">Year</label>
-            <select
-              className="rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-slate-900 px-3 py-2"
-              value={year}
-              onChange={(e) => setYear(Number(e.target.value))}
-            >
-              {YEARS.map((y) => <option value={y} key={y}>{y}</option>)}
-            </select>
-
-            {/* View toggle */}
-            <div className="inline-flex rounded-lg overflow-hidden border border-zinc-300 dark:border-zinc-700">
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+      <div className="max-w-7xl mx-auto px-4 py-8">
+        {/* Header */}
+        <div className="text-center mb-8">
+          <h1 className="text-4xl font-bold text-gray-900 dark:text-white mb-2 bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent">
+            Drafts
+          </h1>
+          
+          {/* Year Selector */}
+          <div className="flex justify-center gap-2 mb-6">
+            {YEARS.map(yearOption => (
               <button
-                className={`px-3 py-2 text-sm ${view === "board" ? "bg-emerald-700 text-white" : "bg-white dark:bg-slate-900 text-zinc-800 dark:text-zinc-200"}`}
-                onClick={() => setView("board")}
+                key={yearOption}
+                onClick={() => setYear(yearOption)}
+                className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                  year === yearOption
+                    ? 'bg-white text-black'
+                    : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
+                }`}
               >
-                Board
+                {yearOption}
               </button>
-              <button
-                className={`px-3 py-2 text-sm ${view === "list" ? "bg-emerald-700 text-white" : "bg-white dark:bg-slate-900 text-zinc-800 dark:text-zinc-200"}`}
-                onClick={() => setView("list")}
-              >
-                List
-              </button>
-            </div>
+            ))}
+          </div>
+        </div>
 
-            {/* Color-by toggle */}
-            <div className="inline-flex rounded-lg overflow-hidden border border-zinc-300 dark:border-zinc-700">
-              <button
-                className={`px-3 py-2 text-sm ${colorMode === "position" ? "bg-emerald-700 text-white" : "bg-white dark:bg-slate-900 text-zinc-800 dark:text-zinc-200"}`}
-                onClick={() => setColorMode("position")}
-              >
-                Position
-              </button>
+        {/* Controls */}
+        <div className="mb-6">
+          <div className="flex flex-col md:flex-row md:items-center gap-4">
+            <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Draft Controls</h2>
+            
+            <div className="flex flex-wrap items-center gap-3">
+              {/* View toggle */}
+              <div className="inline-flex rounded-lg overflow-hidden border border-gray-300 dark:border-gray-600">
+                <button
+                  className={`px-3 py-2 text-sm font-medium transition-colors ${
+                    view === "board" 
+                      ? "bg-white text-black" 
+                      : "bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600"
+                  }`}
+                  onClick={() => setView("board")}
+                >
+                  Board
+                </button>
+                <button
+                  className={`px-3 py-2 text-sm font-medium transition-colors ${
+                    view === "list" 
+                      ? "bg-white text-black" 
+                      : "bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600"
+                  }`}
+                  onClick={() => setView("list")}
+                >
+                  List
+                </button>
+              </div>
 
-              <button
-                className={`px-3 py-2 text-sm ${colorMode === "vorp" ? "bg-emerald-700 text-white" : "bg-white dark:bg-slate-900 text-zinc-800 dark:text-zinc-200"}`}
-                disabled={vorpLoading}
-                onClick={switchToVorp}
-                title={vorpLoading ? "Loading WAR…" : !vorpMapSeason ? "Fetches VORP* (season)" : ""}
-              >
-                {vorpLoading ? "Loading…" : "WAR"}
-              </button>
-
-              {/* NEW: Weekly-sum WAR */}
-              <button
-                className={`px-3 py-2 text-sm ${colorMode === "vorp_weekly" ? "bg-emerald-700 text-white" : "bg-white dark:bg-slate-900 text-zinc-800 dark:text-zinc-200"}`}
-                disabled={vorpWeeklyLoading}
-                onClick={switchToVorpWeekly}
-                title={vorpWeeklyLoading ? "Loading weekly WAR…" : !vorpMapWeekly ? "Fetches WAR (weekly-sum)" : ""}
-              >
-                {vorpWeeklyLoading ? "Loading…" : "WAR (weekly)"}
-              </button>
-
-              {/* Optional: relative mode (commented out by default) */}
-              {/*
-              <button
-                className={`px-3 py-2 text-sm ${colorMode === "vorp_rel" ? "bg-emerald-700 text-white" : "bg-white dark:bg-slate-900 text-zinc-800 dark:text-zinc-200"}`}
-                disabled={relLoading}
-                onClick={switchToVorpRel}
-              >
-                VORP vs Pick
-              </button>
-              */}
+              {/* Color-by toggle */}
+              <div className="inline-flex rounded-lg overflow-hidden border border-gray-300 dark:border-gray-600">
+                <button
+                  className={`px-3 py-2 text-sm font-medium transition-colors ${
+                    colorMode === "position" 
+                      ? "bg-white text-black" 
+                      : "bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600"
+                  }`}
+                  onClick={() => setColorMode("position")}
+                >
+                  Position
+                </button>
+                <button
+                  className={`px-3 py-2 text-sm font-medium transition-colors ${
+                    colorMode === "vorp" 
+                      ? "bg-white text-black" 
+                      : "bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600"
+                  }`}
+                  disabled={vorpLoading}
+                  onClick={switchToVorp}
+                  title={vorpLoading ? "Loading WAR…" : !vorpMapSeason ? "Fetches VORP* (season)" : ""}
+                >
+                  {vorpLoading ? "Loading…" : "WAR"}
+                </button>
+              </div>
             </div>
           </div>
         </div>
-      </div>
 
-      {/* Legends + errors */}
-      {(colorMode === "vorp" || colorMode === "vorp_weekly") && (
-        <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 p-3 bg-white dark:bg-slate-900/80">
-          <div className="flex items-center gap-3 text-xs text-zinc-600 dark:text-zinc-300">
-            <span>low value</span>
-            <div
-              className="h-2 w-40 rounded"
-              style={{ background: "linear-gradient(90deg, rgb(58,25,112) 0%, rgb(128,73,215) 25%, #ffffff 50%, #16a34a 75%, rgb(4,77,31) 100%)" }}
-            />
-            <span className="font-medium text-zinc-700 dark:text-zinc-200">high value</span>
-            {colorMode === "vorp_weekly" && (
-              <span className="ml-3 text-[11px] opacity-80">weekly baselines → summed to season</span>
+        {/* Legends + errors */}
+        {colorMode === "vorp" && (
+          <div className="mb-6">
+            <div className="flex items-center gap-3 text-sm text-gray-600 dark:text-gray-300">
+              <span>low value</span>
+              <div
+                className="h-3 w-48 rounded"
+                style={{ background: "linear-gradient(90deg, rgb(58,25,112) 0%, rgb(128,73,215) 25%, #ffffff 50%, #16a34a 75%, rgb(4,77,31) 100%)" }}
+              />
+              <span className="font-medium text-gray-700 dark:text-gray-200">high value</span>
+            </div>
+            {vorpError && (
+              <div className="mt-3 text-sm text-red-600 dark:text-red-400">
+                {vorpError}
+              </div>
             )}
           </div>
-          {(vorpError || vorpWeeklyError) && (
-            <div className="mt-2 text-xs text-red-600">
-              {vorpError || vorpWeeklyError}
+        )}
+
+        {colorMode === "vorp_rel" && (
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-4 mb-6">
+            <div className="flex items-center gap-3 text-sm text-gray-600 dark:text-gray-300">
+              <span>Vs Pick Expectation:</span>
+              <div
+                className="h-3 w-48 rounded"
+                style={{ background: "linear-gradient(90deg, rgb(58,25,112) 0%, rgb(128,73,215) 25%, #ffffff 50%, #16a34a 75%, rgb(4,77,31) 100%)" }}
+              />
+              <span className="opacity-70">below expected</span>
+              <span className="opacity-70 ml-auto">above expected</span>
             </div>
-          )}
-        </div>
-      )}
-
-      {colorMode === "vorp_rel" && (
-        <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 p-3 bg-white dark:bg-slate-900/80">
-          <div className="flex items-center gap-3 text-xs text-zinc-600 dark:text-zinc-300">
-            <span>Vs Pick Expectation:</span>
-            <div
-              className="h-2 w-40 rounded"
-              style={{ background: "linear-gradient(90deg, rgb(58,25,112) 0%, rgb(128,73,215) 25%, #ffffff 50%, #16a34a 75%, rgb(4,77,31) 100%)" }}
-            />
-            <span className="opacity-70">below expected</span>
-            <span className="opacity-70 ml-auto">above expected</span>
+            {relError && <div className="mt-3 text-sm text-red-600 dark:text-red-400">{relError}</div>}
           </div>
-          {relError && <div className="mt-2 text-xs text-red-600">{relError}</div>}
-        </div>
-      )}
+        )}
 
-      {loading && <div className="text-zinc-600 dark:text-zinc-300">Loading {year} draft…</div>}
-      {error && <div className="text-red-600">{error}</div>}
+        {loading && (
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-8 text-center">
+            <div className="text-gray-600 dark:text-gray-300">Loading {year} draft…</div>
+          </div>
+        )}
+        
+        {error && (
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-8 text-center">
+            <div className="text-red-600 dark:text-red-400">{error}</div>
+          </div>
+        )}
 
-      {!loading && !error && data && (
-        <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-slate-900/80 p-2">
+        {!loading && !error && data && (
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg overflow-hidden">
           {view === "board" ? (
             <DraftBoard
               rounds={draftRounds}
@@ -487,9 +451,10 @@ export default function DraftsPage() {
           ) : (
             <DraftList picks={data.picks} />
           )}
-        </div>
-      )}
-    </main>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -503,7 +468,7 @@ function DraftBoard({
   rel,
 }: {
   rounds: [number, DraftPick[]][];
-  colorMode: "position" | "vorp" | "vorp_weekly" | "vorp_rel";
+  colorMode: "position" | "vorp" | "vorp_rel";
   vorpMap?: VorpMap;
   rel?: VorpRelativeResponse;
 }) {
@@ -577,7 +542,7 @@ function DraftBoard({
       </div>
 
       {/* Body */}
-      <div>
+      <div className="mt-2">
         {rounds.map(([roundNum, picks]) => {
           const slots: (DraftPick | null)[] = Array(teamCount).fill(null);
           for (const p of picks) {
@@ -628,7 +593,7 @@ function DraftBoard({
                   const cls = positionColors[posKey] ?? "bg-zinc-200 text-zinc-800";
                   cardClass += ` ${cls}`;
                   textClass = cls.includes("text-black") ? "text-black" : "text-zinc-800";
-                } else if (colorMode === "vorp" || colorMode === "vorp_weekly") {
+                } else if (colorMode === "vorp") {
                   if (colorMode === "vorp" && info.isPartial) {
                     // partial-season badge only for season VORP (extrapolated rows)
                     cardClass += " bg-white";
@@ -660,7 +625,7 @@ function DraftBoard({
 
                 const displayV = info.value;
                 const showVBadge =
-                  (colorMode === "vorp" || colorMode === "vorp_weekly") &&
+                  colorMode === "vorp" &&
                   typeof displayV === "number" &&
                   Number.isFinite(displayV);
 
@@ -687,8 +652,7 @@ function DraftBoard({
                       {/* TOP ROW */}
                       <div className="flex items-center justify-between text-[10px] mb-0.5">
                         <div className={`font-semibold ${textClass}`}>
-                          {p.pick_num ?? "—"}
-                          {p.overall_pick != null && <span className="ml-1 opacity-80">#{p.overall_pick}</span>}
+                          {p.round_num && p.pick_num ? `${p.round_num}.${p.pick_num}` : "—"}
                         </div>
                         <div className="flex items-center gap-1">
                           {showVBadge && (

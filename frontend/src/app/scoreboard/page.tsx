@@ -76,12 +76,14 @@ function GameBubble({
   game, 
   week, 
   onClick,
-  isEliminated = false
+  isEliminated = false,
+  isChampionship = false
 }: { 
   game: GameResult | null; 
   week: number; 
   onClick: () => void;
   isEliminated?: boolean;
+  isChampionship?: boolean;
 }) {
   if (!game) {
     return (
@@ -89,7 +91,7 @@ function GameBubble({
         className="w-12 h-12 rounded-full bg-gray-200 dark:bg-gray-700 flex items-center justify-center cursor-pointer hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"
         onClick={onClick}
       >
-        <span className="text-xs text-gray-500 dark:text-gray-400">—</span>
+        <span className="text-xs text-gray-500 dark:text-gray-400">BYE</span>
       </div>
     );
   }
@@ -100,19 +102,24 @@ function GameBubble({
   return (
     <div 
       className={`w-12 h-12 rounded-full flex items-center justify-center cursor-pointer transition-all hover:scale-110 ${
-        isPlayoff && isEliminated
+        isChampionship && isWin
+          ? 'bg-gradient-to-br from-yellow-400 to-yellow-600 hover:from-yellow-300 hover:to-yellow-500 text-white shadow-2xl animate-pulse'
+          : isPlayoff && isEliminated
           ? (isWin 
-              ? 'bg-green-300 hover:bg-green-400 text-white shadow-lg opacity-60' 
-              : 'bg-red-300 hover:bg-red-400 text-white shadow-lg opacity-60')
+              ? 'bg-emerald-300 hover:bg-emerald-400 text-white shadow-lg opacity-60' 
+              : 'bg-violet-300 hover:bg-violet-400 text-white shadow-lg opacity-60')
           : isPlayoff
           ? (isWin 
-              ? 'bg-green-500 hover:bg-green-600 text-white shadow-lg' 
-              : 'bg-red-500 hover:bg-red-600 text-white shadow-lg')
+              ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-lg' 
+              : 'bg-violet-600 hover:bg-violet-700 text-white shadow-lg')
           : (isWin 
-              ? 'bg-green-500 hover:bg-green-600 text-white shadow-lg' 
-              : 'bg-red-500 hover:bg-red-600 text-white shadow-lg')
+              ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-lg' 
+              : 'bg-violet-600 hover:bg-violet-700 text-white shadow-lg')
       }`}
       onClick={onClick}
+      style={isChampionship && isWin ? {
+        boxShadow: '0 0 20px rgba(251, 191, 36, 0.8), 0 0 40px rgba(251, 191, 36, 0.6), 0 0 60px rgba(251, 191, 36, 0.4)'
+      } : {}}
     >
       <span className="text-xs font-semibold">{game.result}</span>
     </div>
@@ -150,11 +157,6 @@ function GameDetailModal({
   const positionOrder = ['QB', 'RB', 'RB', 'WR', 'WR', 'TE', 'FLEX', 'D/ST', 'K'];
   
   const getStarters = (team: TeamRoster) => {
-    console.log(`\n=== ${team.team_name} Players ===`);
-    team.players.forEach((player, index) => {
-      console.log(`${index}: ${player.player_name} - Position: "${player.position}" - Points: ${player.points}`);
-    });
-    
     const starters: PlayerScore[] = [];
     const usedPlayers = new Set<string>();
     
@@ -209,26 +211,29 @@ function GameDetailModal({
       usedPlayers.add(k.player_name);
     }
     
-    // Fill remaining slots with any available players
-    const remainingPlayers = team.players.filter(p => !usedPlayers.has(p.player_name));
-    while (starters.length < 9 && remainingPlayers.length > 0) {
-      const player = remainingPlayers.shift();
-      if (player) {
-        starters.push(player);
-        usedPlayers.add(player.player_name);
-      }
-    }
-    
-    console.log(`\n=== ${team.team_name} Starters ===`);
-    starters.forEach((starter, index) => {
-      console.log(`${index}: ${starter.player_name} - Position: "${starter.position}" - Points: ${starter.points}`);
-    });
     
     return starters;
   };
 
   const homeStarters = getStarters(matchup.home_team);
   const awayStarters = getStarters(matchup.away_team);
+
+  const getPlayerComparison = (homePlayer: PlayerScore, awayPlayer: PlayerScore) => {
+    // Use the same points field that's displayed in the table
+    const homePoints = homePlayer.points || 0;
+    const awayPoints = awayPlayer.points || 0;
+    
+    // Convert to numbers to ensure proper comparison
+    const homeNum = Number(homePoints);
+    const awayNum = Number(awayPoints);
+    
+    return {
+      homeWins: homeNum > awayNum,
+      awayWins: awayNum > homeNum,
+      homePoints: homeNum,
+      awayPoints: awayNum
+    };
+  };
 
   return (
     <div className="fixed inset-0 backdrop-blur-sm bg-white/20 dark:bg-black/20 flex items-center justify-center z-50 p-4">
@@ -250,19 +255,43 @@ function GameDetailModal({
           
           {/* Team Scores Header */}
           <div className="grid grid-cols-2 gap-4 mb-6">
-            <div className="text-center p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
-              <h4 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
+            <div className={`text-center p-4 rounded-lg ${
+              matchup.home_team.total_score > matchup.away_team.total_score 
+                ? 'bg-emerald-50 dark:bg-emerald-900/20 border-2 border-emerald-200 dark:border-emerald-700' 
+                : 'bg-gray-50 dark:bg-gray-700'
+            }`}>
+              <h4 className={`text-lg font-semibold mb-2 ${
+                matchup.home_team.total_score > matchup.away_team.total_score 
+                  ? 'text-emerald-800 dark:text-emerald-200' 
+                  : 'text-gray-900 dark:text-white'
+              }`}>
                 {matchup.home_team.team_name}
               </h4>
-              <div className="text-3xl font-bold text-gray-900 dark:text-white">
+              <div className={`text-3xl font-bold ${
+                matchup.home_team.total_score > matchup.away_team.total_score 
+                  ? 'text-emerald-700 dark:text-emerald-300' 
+                  : 'text-gray-900 dark:text-white'
+              }`}>
                 {matchup.home_team.total_score.toFixed(1)}
               </div>
             </div>
-            <div className="text-center p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
-              <h4 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
+            <div className={`text-center p-4 rounded-lg ${
+              matchup.away_team.total_score > matchup.home_team.total_score 
+                ? 'bg-emerald-50 dark:bg-emerald-900/20 border-2 border-emerald-200 dark:border-emerald-700' 
+                : 'bg-gray-50 dark:bg-gray-700'
+            }`}>
+              <h4 className={`text-lg font-semibold mb-2 ${
+                matchup.away_team.total_score > matchup.home_team.total_score 
+                  ? 'text-emerald-800 dark:text-emerald-200' 
+                  : 'text-gray-900 dark:text-white'
+              }`}>
                 {matchup.away_team.team_name}
               </h4>
-              <div className="text-3xl font-bold text-gray-900 dark:text-white">
+              <div className={`text-3xl font-bold ${
+                matchup.away_team.total_score > matchup.home_team.total_score 
+                  ? 'text-emerald-700 dark:text-emerald-300' 
+                  : 'text-gray-900 dark:text-white'
+              }`}>
                 {matchup.away_team.total_score.toFixed(1)}
               </div>
             </div>
@@ -274,19 +303,13 @@ function GameDetailModal({
               <thead>
                 <tr className="border-b border-gray-200 dark:border-gray-700">
                   <th className="text-left py-3 px-4 font-medium text-gray-900 dark:text-white">
-                    Position
-                  </th>
-                  <th className="text-left py-3 px-4 font-medium text-gray-900 dark:text-white">
                     {matchup.home_team.team_name}
                   </th>
                   <th className="text-center py-3 px-4 font-medium text-gray-900 dark:text-white">
                     Points
                   </th>
                   <th className="text-center py-3 px-4 font-medium text-gray-900 dark:text-white">
-                    Proj
-                  </th>
-                  <th className="text-center py-3 px-4 font-medium text-gray-900 dark:text-white">
-                    Proj
+                    Pos
                   </th>
                   <th className="text-center py-3 px-4 font-medium text-gray-900 dark:text-white">
                     Points
@@ -301,28 +324,48 @@ function GameDetailModal({
                   const homePlayer = homeStarters[index];
                   const awayPlayer = awayStarters[index];
                   
+                  const comparison = homePlayer && awayPlayer ? getPlayerComparison(homePlayer, awayPlayer) : null;
+                  
                   return (
-                    <tr key={position} className="border-b border-gray-100 dark:border-gray-800">
-                      <td className="py-3 px-4 font-medium text-gray-700 dark:text-gray-300">
+                    <tr key={`${position}-${index}`} className="border-b border-gray-100 dark:border-gray-800">
+                      <td className="py-3 px-4 text-gray-900 dark:text-white">
+                        <div className="flex items-center gap-2">
+                          <span>{homePlayer ? homePlayer.player_name : '—'}</span>
+                          {comparison && comparison.homeWins && (
+                            <span className="text-emerald-600 dark:text-emerald-400 text-sm">✓</span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="py-3 px-4 text-center font-semibold text-gray-900 dark:text-white">
+                        {homePlayer ? (
+                          <span>
+                            {homePlayer.points.toFixed(1)}
+                            <sub className="text-xs text-gray-500 dark:text-gray-400 ml-1">
+                              {homePlayer.projected_points.toFixed(1)}
+                            </sub>
+                          </span>
+                        ) : '—'}
+                      </td>
+                      <td className="py-3 px-4 text-center font-medium text-gray-700 dark:text-gray-300">
                         {position}
                       </td>
-                      <td className="py-3 px-4 text-gray-900 dark:text-white">
-                        {homePlayer ? homePlayer.player_name : '—'}
-                      </td>
                       <td className="py-3 px-4 text-center font-semibold text-gray-900 dark:text-white">
-                        {homePlayer ? homePlayer.points.toFixed(1) : '—'}
-                      </td>
-                      <td className="py-3 px-4 text-center text-sm text-gray-500 dark:text-gray-400">
-                        {homePlayer ? homePlayer.projected_points.toFixed(1) : '—'}
-                      </td>
-                      <td className="py-3 px-4 text-center text-sm text-gray-500 dark:text-gray-400">
-                        {awayPlayer ? awayPlayer.projected_points.toFixed(1) : '—'}
-                      </td>
-                      <td className="py-3 px-4 text-center font-semibold text-gray-900 dark:text-white">
-                        {awayPlayer ? awayPlayer.points.toFixed(1) : '—'}
+                        {awayPlayer ? (
+                          <span>
+                            {awayPlayer.points.toFixed(1)}
+                            <sub className="text-xs text-gray-500 dark:text-gray-400 ml-1">
+                              {awayPlayer.projected_points.toFixed(1)}
+                            </sub>
+                          </span>
+                        ) : '—'}
                       </td>
                       <td className="py-3 px-4 text-right text-gray-900 dark:text-white">
-                        {awayPlayer ? awayPlayer.player_name : '—'}
+                        <div className="flex items-center justify-end gap-2">
+                          <span>{awayPlayer ? awayPlayer.player_name : '—'}</span>
+                          {comparison && comparison.awayWins && (
+                            <span className="text-emerald-600 dark:text-emerald-400 text-sm">✓</span>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   );
@@ -437,12 +480,12 @@ export default function ScoreboardPage() {
     const playoffGames = team.games.filter(game => game.is_playoff && game.week <= week);
     
     // Debug logging for week 15
-    if (week === 15) {
-      console.log(`\n=== ${team.team_name} Week 15 Elimination Check ===`);
-      playoffGames.forEach(game => {
-        console.log(`Week ${game.week}: vs ${game.opponent} - ${game.result} - Type: ${game.matchup_type} - Playoff: ${game.is_playoff}`);
-      });
-    }
+    // if (week === 15) {
+    //   console.log(`\n=== ${team.team_name} Week 15 Elimination Check ===`);
+    //   playoffGames.forEach(game => {
+    //     console.log(`Week ${game.week}: vs ${game.opponent} - ${game.result} - Type: ${game.matchup_type} - Playoff: ${game.is_playoff}`);
+    //   });
+    // }
     
     // Check if team is in consolation bracket (any consolation game means they're eliminated)
     const hasConsolationGame = playoffGames.some(game => 
@@ -456,15 +499,26 @@ export default function ScoreboardPage() {
       (game.matchup_type === 'WINNERS_BRACKET' || game.matchup_type === 'NONE')
     );
     
-    const isEliminated = hasConsolationGame || hasPlayoffLoss;
+    return hasConsolationGame || hasPlayoffLoss;
+  };
+
+  const isChampionshipWinner = (team: TeamScoreboard, week: number) => {
+    if (!scoreboard) return false;
     
-    if (week === 15) {
-      console.log(`Has consolation game: ${hasConsolationGame}`);
-      console.log(`Has playoff loss: ${hasPlayoffLoss}`);
-      console.log(`Is eliminated: ${isEliminated}`);
-    }
+    // Determine the championship week based on year
+    const championshipWeek = selectedYear === 2020 ? 16 : 17;
     
-    return isEliminated;
+    if (week !== championshipWeek) return false;
+    
+    // Check if this team won the championship game (winners bracket)
+    const championshipGame = team.games.find(game => 
+      game.week === championshipWeek && 
+      game.is_playoff && 
+      game.result === "W" &&
+      (game.matchup_type === 'WINNERS_BRACKET' || game.matchup_type === 'NONE')
+    );
+    
+    return !!championshipGame;
   };
 
   if (loading) {
@@ -539,7 +593,7 @@ export default function ScoreboardPage() {
             <table className="w-full">
               <thead className="bg-gray-50 dark:bg-gray-700">
                 <tr>
-                  <th className="px-4 py-3 text-left text-sm font-medium text-gray-900 dark:text-white">
+                  <th className="sticky left-0 z-10 bg-gray-50 dark:bg-gray-700 px-4 py-3 text-left text-sm font-medium text-gray-900 dark:text-white">
                     Team
                   </th>
                   <th className="px-4 py-3 text-center text-sm font-medium text-gray-900 dark:text-white">
@@ -564,10 +618,20 @@ export default function ScoreboardPage() {
               </thead>
               <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
                 {scoreboard.teams.map((team, index) => (
-                  <tr key={team.team_name} className="hover:bg-gray-50 dark:hover:bg-gray-700">
-                    <td className="px-4 py-3">
+                  <tr key={team.team_name} className="hover:bg-gray-50 dark:hover:bg-gray-700 group">
+                    <td className="sticky left-0 z-10 bg-white dark:bg-gray-800 group-hover:bg-gray-50 dark:group-hover:bg-gray-700 px-4 py-3">
                       <div className="flex items-center">
-                        <span className="text-sm font-medium text-gray-900 dark:text-white">
+                        <span 
+                          className={`text-sm font-bold ${
+                            isChampionshipWinner(team, getMaxWeek()) 
+                              ? 'bg-gradient-to-r from-yellow-200 to-yellow-400 bg-clip-text text-transparent animate-pulse' 
+                              : 'text-gray-900 dark:text-white'
+                          }`}
+                          style={isChampionshipWinner(team, getMaxWeek()) ? {
+                            textShadow: '0 0 8px #fbbf24, 0 0 16px #f59e0b',
+                            filter: 'drop-shadow(0 0 24px #fbbf24)'
+                          } : {}}
+                        >
                           {team.team_name}
                         </span>
                       </div>
@@ -599,6 +663,7 @@ export default function ScoreboardPage() {
                     {getPlayoffWeeks().map(week => {
                       const game = getGameForWeek(team, week);
                       const isEliminated = isTeamEliminated(team, week);
+                      const isChampionship = isChampionshipWinner(team, week);
                       return (
                         <td key={`playoff-${week}`} className="px-2 py-3 text-center">
                           <GameBubble
@@ -606,6 +671,7 @@ export default function ScoreboardPage() {
                             week={week}
                             onClick={() => game && handleGameClick(team, game)}
                             isEliminated={isEliminated}
+                            isChampionship={isChampionship}
                           />
                         </td>
                       );
@@ -621,25 +687,25 @@ export default function ScoreboardPage() {
         <div className="mt-6 flex justify-center">
           <div className="flex items-center gap-6 text-sm text-gray-600 dark:text-gray-400">
             <div className="flex items-center gap-2">
-              <div className="w-4 h-4 rounded-full bg-green-500"></div>
+              <div className="w-4 h-4 rounded-full bg-emerald-600"></div>
               <span>Win</span>
             </div>
             <div className="flex items-center gap-2">
-              <div className="w-4 h-4 rounded-full bg-red-500"></div>
+              <div className="w-4 h-4 rounded-full bg-violet-600"></div>
               <span>Loss</span>
             </div>
             <div className="flex items-center gap-2">
-              <div className="w-4 h-4 rounded-full bg-green-300 opacity-60"></div>
+              <div className="w-4 h-4 rounded-full bg-emerald-300 opacity-60"></div>
               <span>Eliminated Team Win</span>
             </div>
             <div className="flex items-center gap-2">
-              <div className="w-4 h-4 rounded-full bg-red-300 opacity-60"></div>
+              <div className="w-4 h-4 rounded-full bg-violet-300 opacity-60"></div>
               <span>Eliminated Team Loss</span>
             </div>
-            <div className="flex items-center gap-2">
+            {/* <div className="flex items-center gap-2">
               <div className="w-4 h-4 rounded-full bg-gray-200 dark:bg-gray-700"></div>
               <span>No Game</span>
-            </div>
+            </div> */}
           </div>
         </div>
       </div>

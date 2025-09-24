@@ -1287,13 +1287,14 @@ def get_matchup_detail(year: int, week: int, team1: str = None, team2: str = Non
         box = None
         if team1 and team2:
             # Look for matchup between the two specific teams
-            for b in box_scores:
-                home_name = b.home_team.team_name
-                away_name = b.away_team.team_name
-                if ((home_name == team1 and away_name == team2) or 
-                    (home_name == team2 and away_name == team1)):
-                    box = b
-                    break
+            for i, b in enumerate(box_scores):
+                if type(b.home_team) != int and type(b.away_team) != int:
+                    home_name = b.home_team.team_name
+                    away_name = b.away_team.team_name
+                    if ((home_name == team1 and away_name == team2) or 
+                        (home_name == team2 and away_name == team1)):
+                        box = b
+                        break
         else:
             # Fall back to first matchup if no team names specified
             box = box_scores[0]
@@ -1301,9 +1302,7 @@ def get_matchup_detail(year: int, week: int, team1: str = None, team2: str = Non
         if not box:
             raise HTTPException(status_code=404, detail=f"Matchup between {team1} and {team2} not found for week {week} in {year}")
         
-        # Skip if it's a playoff game
-        if hasattr(box, 'is_playoff') and box.is_playoff:
-            raise HTTPException(status_code=404, detail=f"Playoff game not available")
+        # Allow playoff games for matchup details
         
         def process_team_roster(lineup):
             """Process team roster and separate starters from bench"""
@@ -1360,8 +1359,13 @@ def get_matchup_detail(year: int, week: int, team1: str = None, team2: str = Non
             return ordered_starters, bench
         
         # Process both team rosters
-        home_starters, home_bench = process_team_roster(box.home_lineup if hasattr(box, 'home_lineup') else None)
-        away_starters, away_bench = process_team_roster(box.away_lineup if hasattr(box, 'away_lineup') else None)
+        try:
+            home_starters, home_bench = process_team_roster(box.home_lineup if hasattr(box, 'home_lineup') else None)
+            away_starters, away_bench = process_team_roster(box.away_lineup if hasattr(box, 'away_lineup') else None)
+        except Exception as e:
+            # Fallback to empty rosters if processing fails
+            home_starters, home_bench = [], []
+            away_starters, away_bench = [], []
         
         # Combine starters and bench for each team
         home_players = home_starters# + home_bench

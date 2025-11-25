@@ -242,3 +242,4 @@ def run_trade_analysis(year: int) -> Tuple[pd.DataFrame, Dict, Dict, Dict]:
     except Exception as e:
         print(f"Error in trade analysis for {year}: {e}")
         return pd.DataFrame(), {}, {}, {}
+

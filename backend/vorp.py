@@ -4,6 +4,19 @@ import pandas as pd
 import re
 import numpy as np
 from typing import Optional, List, Dict, Any
+import duckdb
+
+
+# espn_s2 = "AEC20e998honXS4Wi0Z8qzlJdam4%2F%2BaApa7apspnhKR0Npb%2FMsF5DuQsFUcHW%2FhPihQun9U6PGITOi2CkbdfDCkUc8druBVhAwT08Lzrvv8oZli8YAuTi9mIWg7YqtorCNOEKPxHpYswnT3q7b885tRDKBJpLCH0T2h4h1p%2B02SfdlDhjEB2gHqFk1xl6tJRNMBiCkZ8i5RttLW6ER9ZvLTmmAdb5ceZhQ27NEMiMf%2BjWSSvwBdnf2roxwt9baw33BVnnITqYVb8FXsaUwm7%2Bm0m9GLQ%2B66%2BU%2Brg%2BQngXm1ekA%3D%3D"
+# swid = "{B431504E-F779-4C49-B3E8-28DDF7409957}"
+# LEAGUE_ID = 86952922
+
+
+# def get_league(year):
+#     league = League(league_id=LEAGUE_ID, year=year, swid=swid, espn_s2=espn_s2)
+#     return league
+    
+    
 
 # -----------------------------
 # Scraper (unchanged)
@@ -497,61 +510,227 @@ def compute_vorp_star(
 #     )
 
 #     return weekly_out, season_check
+def get_weekly_fantasy_points_from_players(year, max_week, league) -> pd.DataFrame:
+    """Get weekly fantasy points from box scores (starters + bench) and free agents"""
+    # league = get_league(year)
+    rows = []
+    b = 0
+    f = 0
+    
+    for week in range(1, max_week + 1):
+        try:
+            # Get box scores for starters and bench
+            box_scores = league.box_scores(week=week)
+            for box in box_scores:
+                for side in ("home_lineup", "away_lineup", "home_bench", "away_bench"):
+                    lineup = getattr(box, side, []) or []
+                    for player in lineup:
+                        player_name = getattr(player, "name", None)
+                        position = getattr(player, "position", None)
+                        points = getattr(player, "points", None)
+                        
+                        if player_name and position and points is not None:
+                            rows.append({
+                                "player_name": str(player_name),
+                                "fantasy_pos": str(position),
+                                "week": week,
+                                "weekly_points_ppr": float(points)
+                            })
+                            b+=1
+            
+            # Get free agents
+            free_agents = league.free_agents()
+            for player in free_agents:
+                if hasattr(player, 'stats') and player.stats and str(week) in player.stats:
+                    week_data = player.stats[str(week)]
+                    if 'points' in week_data:
+                        rows.append({
+                            "player_name": str(player.name),
+                            "fantasy_pos": str(player.position),
+                            "week": week,
+                            "weekly_points_ppr": float(week_data['points'])
+                        })
+                        f+=1
+        except Exception as e:
+            continue
+        
+    print(f"Box scores: {b}, Free agents: {f}")
+    
+    return pd.DataFrame(rows)
+
+
+def fill_missing_weeks(df, year, league) -> pd.DataFrame:
+    """Fill missing weeks for players who don't have 17 weeks of data"""
+    
+    # Find players with less than 17 weeks
+    player_week_counts = df.groupby('player_name')['week'].count()
+    incomplete_players = player_week_counts[player_week_counts < 17].index.tolist()
+    
+    if not incomplete_players:
+        return df
+    
+    # Get stats for incomplete players
+    additional_rows = []
+    for player_name in incomplete_players:
+        try:
+            player_info = league.player_info(player_name)
+            team = player_info.proTeam
+            
+            if hasattr(player_info, 'stats') and player_info.stats:
+                for week in range(1, 18):
+        
+                    
+                    week_data = player_info.stats[week]
+
+                    if 'points' in week_data:
+                        additional_rows.append({
+                            "player_name": str(player_name),
+                            "fantasy_pos": str(player_info.position),
+                            "week": week,
+                            "weekly_points_ppr": float(week_data['points']),
+                            'team':str(team)
+                        })
+        except Exception as e:
+            continue
+    
+    # Combine original data with additional data
+    if additional_rows:
+        additional_df = pd.DataFrame(additional_rows)
+        return pd.concat([df, additional_df], ignore_index=True)
+    return df
 
 
 # ---------------------------------------------------------------------
 # Example wrapper (optional)
 # ---------------------------------------------------------------------
-def build_vorp_table(year:int, use_ppg:bool=False,
-                     teams:int=12,
-                     starters_per_team:dict=None,
-                     pool_factor:float=1.0,
-                     winsor_limits:tuple=(0.02,0.98)) -> pd.DataFrame:
+def build_vorp_table(year, use_ppg=False,
+                     teams=12,
+                     starters_per_team=None,
+                     pool_factor=1.0,
+                     winsor_limits=(0.02,0.98),
+                     league=None) -> pd.DataFrame:
     """
     Keeps your original builder (season VORP★). You can separately call
     compute_weekly_vorp_star_rescaled(...) once you have weekly logs.
     """
     if starters_per_team is None:
         starters_per_team = {"QB":1.25,"RB":2.5,"WR":2.5,"TE":1.25}
-
+        
     # 1) scrape (you provide these)
-    df = scrape_pfr_fantasy(year)  # season totals only
-
-    # 2) clean
-    df["player_name"] = (
-        df["player"]
+    # df = scrape_pfr_fantasy(year)  # season totals only
+    
+    df = get_weekly_fantasy_points_from_players(year, max_week=17, league=league)
+    df = fill_missing_weeks(df, year, league)
+    df = df.drop_duplicates(subset=['player_name', 'week'])
+    df = df.loc[df.weekly_points_ppr != 0]
+        
+    
+    result = duckdb.sql("""
+                    with totals as (
+                        select player_name, fantasy_pos, team, sum(weekly_points_ppr) as total_points,
+                        rank() over (partition by fantasy_pos order by sum(weekly_points_ppr) desc) as pos_rank,
+                        rank() over (order by sum(weekly_points_ppr) desc) as overall_rank
+                        from df
+                        group by player_name, fantasy_pos, team 
+                        order by total_points desc
+                    )
+                    
+                    SELECT *
+                    FROM df
+                    left join totals using (player_name, fantasy_pos)
+                    """).df()
+    
+    
+    caps = pd.DataFrame(result.groupby(['fantasy_pos']).agg({'pos_rank':'max'}).\
+        pos_rank.apply(lambda x:np.ceil(0.60 * x))).reset_index()
+    
+    ## filter top 60%
+    result2 = duckdb.sql("""
+           select player_name, fantasy_pos, team, week, weekly_points_ppr, result.pos_rank, overall_rank from result 
+           left join caps using (fantasy_pos)
+           where result.pos_rank <= caps.pos_rank
+           """).df()
+    
+    result2['log_ppr'] = result2.weekly_points_ppr.apply(lambda x:np.log10(x))
+    
+    ## Weekly z-scores
+    z_scores = duckdb.sql("""
+           
+           with norms as (
+           select avg(log_ppr) as avg_log_ppr, stddev(log_ppr) as std_log_ppr, fantasy_pos
+           from result2
+           group by fantasy_pos
+           )
+        
+           select *,
+           (log_ppr - avg_log_ppr) / std_log_ppr as z_week_ppr
+           from result2
+           left join norms using (fantasy_pos)   
+           """).df()
+    
+    
+    ## Season z-scores (mean and sd)
+    z_season = z_scores.groupby(['player_name', 'team']).agg({'fantasy_pos':'first', 'z_week_ppr':'sum', 
+            'log_ppr':'count', 'weekly_points_ppr':'sum'}).reset_index().sort_values(['z_week_ppr'], ascending=False)
+    
+    z_season['inj_flag'] = (z_season['log_ppr'] < 14).astype(int)
+    
+    # Extrapolate injury z-score
+    z_season = duckdb.sql("""
+           select *,
+           case when inj_flag = 1 then z_week_ppr * 16 / log_ppr else z_week_ppr end as adj_z_week_ppr
+           from z_season
+           """).df()
+    
+    z_season = z_season.rename(columns={'log_ppr':'g', 'weekly_points_ppr':'fantasy_points_ppr'})
+    
+    
+    z_season["player_name"] = (
+        z_season["player_name"]
         .astype(str)
         .str.replace(r"[*+.]", "", regex=True)
         .str.replace(r"\s+", " ", regex=True)
         .str.strip()
     )
 
-    cols_keep = ["player_name", "team", "fantasy_pos", "g", "gs", "fantasy_points_ppr"]
-    stats = df.loc[:, [c for c in cols_keep if c in df.columns]].copy()
-    stats = stats[stats["fantasy_pos"].isin(ALLOWED_POS)].copy()
+    
+    # 2) clean
+    # try:
+    #     df["player_name"] = (
+    #         df["player"]
+    #         .astype(str)
+    #         .str.replace(r"[*+.]", "", regex=True)
+    #         .str.replace(r"\s+", " ", regex=True)
+    #         .str.strip()
+    #     )
+    # except Exception as e:
+    #     continue
 
-    for c in ["g", "gs", "fantasy_points_ppr"]:
-        if c in stats.columns:
-            stats[c] = pd.to_numeric(stats[c], errors="coerce").fillna(0.0)
+    # cols_keep = ["player_name", "team", "fantasy_pos", "g", "gs", "fantasy_points_ppr"]
+    # stats = df.loc[:, [c for c in cols_keep if c in df.columns]].copy()
+    # stats = stats[stats["fantasy_pos"].isin(ALLOWED_POS)].copy()
 
-    # 3) compute VORP* (season formula)
-    df_v = compute_vorp_star(
-        stats,
-        teams=teams,
-        starters_per_team=starters_per_team,
-        use_ppg=use_ppg,           # your choice
-        min_games_for_ppg=14,
-        pool_factor=pool_factor,
-        winsor_limits=winsor_limits,
-    )
+    # for c in ["g", "gs", "fantasy_points_ppr"]:
+    #     if c in stats.columns:
+    #         stats[c] = pd.to_numeric(stats[c], errors="coerce").fillna(0.0)
+
+    # # 3) compute VORP* (season formula)
+    # df_v = compute_vorp_star(
+    #     stats,
+    #     teams=teams,
+    #     starters_per_team=starters_per_team,
+    #     use_ppg=use_ppg,           # your choice
+    #     min_games_for_ppg=14,
+    #     pool_factor=pool_factor,
+    #     winsor_limits=winsor_limits,
+    # )
 
     out_cols = [
         "player_name", "team", "fantasy_pos", "g",
-        "fantasy_points_ppr", "vorp_star",
-        "vorp_star_rank_overall", "vorp_star_rank_pos",
-        "partial_season", "vorp_star_extrap",
+        "fantasy_points_ppr", "z_week_ppr",
+        "inj_flag", "adj_z_week_ppr",
     ]
-    out = df_v[out_cols].sort_values("vorp_star", ascending=False).reset_index(drop=True)
+    out = z_season[out_cols]
     return out
 
 '''

@@ -13,13 +13,18 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 from trade_analysis import get_league
 import numpy as np
-
+import threading
+import sqlite3
 
 from vorp import build_vorp_table, build_linear_extrapolated_table
 
 
 LEAGUE_ID = int(os.getenv("LEAGUE_ID", "86952922"))
 SUPPORTED_YEARS = {2020, 2021, 2022, 2024, 2025}
+
+# Status tracking for league initialization
+league_status = {}  # {league_id: {'status': 'idle'|'initializing'|'ready'|'error', 'message': str, 'progress': str}}
+status_lock = threading.Lock()
 
 app = FastAPI(title="Fantasy League API", version="0.1.0")
 
@@ -277,8 +282,13 @@ def _compute_expected_wins_map(year: int) -> dict[int, float]:
 # ======================
 
 @app.get("/standings/{year}", response_model=StandingsResponse)
-def get_standings(year: int) -> StandingsResponse:
+def get_standings(year: int, league_id: Optional[int] = Query(None, description="League ID")) -> StandingsResponse:
+    # Use provided league_id or fall back to default
+    effective_league_id = league_id or LEAGUE_ID
+    
     try:
+        # For now, standings uses ESPN API directly, so we still use _get_league
+        # TODO: Update _get_league to accept league_id parameter
         league = _get_league(year)
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e))
@@ -318,7 +328,7 @@ def get_standings(year: int) -> StandingsResponse:
 
     # Same sort as before
     teams_out.sort(key=lambda x: (x.win_percentage, x.points_for), reverse=True)
-    return StandingsResponse(year=year, league_id=LEAGUE_ID, num_teams=len(teams_out), teams=teams_out)
+    return StandingsResponse(year=year, league_id=effective_league_id, num_teams=len(teams_out), teams=teams_out)
 
 
 @app.get("/playoffs/{year}", response_model=PlayoffBracket)
@@ -693,32 +703,101 @@ def get_vorp(
     year: int,
     use_ppg: bool = Query(False, description="Use points per game"),
     top: int = Query(500, ge=1, le=2000, description="Limit rows"),
+    league_id: Optional[int] = Query(None, description="League ID"),
 ):
+    # Use provided league_id or fall back to default
+    effective_league_id = league_id or LEAGUE_ID
+    
     try:
         # Query VORP data from database
         import sqlite3
         conn = sqlite3.connect('weekly_fantasy_data.db')
+        cursor = conn.cursor()
         
-        query = """
-            SELECT pt.player_name, pt.fantasy_pos, pt.total_points, pt.pos_rank, 
-                   pt.overall_rank, pt.vorp_star,
-                   COUNT(CASE WHEN zs.week != 0 AND zs.weekly_points_ppr IS NOT NULL THEN 1 END) as games_played,
-                   (SELECT zs2.fantasy_team 
-                    FROM z_scores zs2 
-                    WHERE zs2.player_name = pt.player_name 
-                      AND zs2.year = pt.year 
-                      AND zs2.fantasy_team IS NOT NULL
-                    ORDER BY zs2.week DESC, zs2.id DESC
-                    LIMIT 1) as fantasy_team
-            FROM player_totals pt
-            LEFT JOIN z_scores zs ON pt.player_name = zs.player_name AND pt.year = zs.year
-            WHERE pt.year = ?
-            GROUP BY pt.player_name, pt.fantasy_pos, pt.total_points, pt.pos_rank, 
-                     pt.overall_rank, pt.vorp_star
-            ORDER BY pt.vorp_star DESC
-        """
+        # Check if player_totals table exists and has league_id column, add if missing
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='player_totals'")
+        player_totals_exists = cursor.fetchone() is not None
         
-        table = pd.read_sql_query(query, conn, params=[year])
+        if player_totals_exists:
+            cursor.execute("PRAGMA table_info(player_totals)")
+            player_totals_columns = [col[1] for col in cursor.fetchall()]
+            if 'league_id' not in player_totals_columns:
+                try:
+                    cursor.execute("ALTER TABLE player_totals ADD COLUMN league_id INTEGER")
+                    conn.commit()
+                    cursor.execute("UPDATE player_totals SET league_id = ? WHERE league_id IS NULL", (LEAGUE_ID,))
+                    conn.commit()
+                except Exception as e:
+                    print(f"Warning: Could not add league_id to player_totals: {e}")
+        
+        # Check if z_scores table exists and has league_id column, add if missing
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='z_scores'")
+        z_scores_exists = cursor.fetchone() is not None
+        
+        has_league_id = False
+        if z_scores_exists:
+            cursor.execute("PRAGMA table_info(z_scores)")
+            z_scores_columns = [col[1] for col in cursor.fetchall()]
+            has_league_id = 'league_id' in z_scores_columns
+            
+            # If table exists but doesn't have league_id, add it
+            if not has_league_id:
+                try:
+                    cursor.execute("ALTER TABLE z_scores ADD COLUMN league_id INTEGER")
+                    conn.commit()
+                    has_league_id = True
+                    # Set default league_id for existing rows
+                    cursor.execute("UPDATE z_scores SET league_id = ? WHERE league_id IS NULL", (LEAGUE_ID,))
+                    conn.commit()
+                except Exception as e:
+                    print(f"Warning: Could not add league_id to z_scores: {e}")
+                    has_league_id = False
+        
+        if has_league_id:
+            query = """
+                SELECT pt.player_name, pt.fantasy_pos, pt.total_points, pt.pos_rank, 
+                       pt.overall_rank, pt.vorp_star,
+                       COUNT(CASE WHEN zs.week != 0 AND zs.weekly_points_ppr IS NOT NULL THEN 1 END) as games_played,
+                        (SELECT zs2.fantasy_team 
+                        FROM z_scores zs2 
+                        WHERE zs2.player_name = pt.player_name 
+                          AND zs2.year = pt.year 
+                          AND (zs2.league_id = pt.league_id OR (zs2.league_id IS NULL AND pt.league_id IS NULL))
+                          AND zs2.fantasy_team IS NOT NULL
+                        ORDER BY zs2.week DESC, zs2.id DESC
+                        LIMIT 1) as fantasy_team
+                FROM player_totals pt
+                LEFT JOIN z_scores zs ON pt.player_name = zs.player_name 
+                    AND pt.year = zs.year 
+                    AND (pt.league_id = zs.league_id OR (pt.league_id IS NULL AND zs.league_id IS NULL))
+                WHERE pt.year = ? AND (pt.league_id = ? OR pt.league_id IS NULL)
+                GROUP BY pt.player_name, pt.fantasy_pos, pt.total_points, pt.pos_rank, 
+                         pt.overall_rank, pt.vorp_star
+                ORDER BY pt.vorp_star DESC
+            """
+            table = pd.read_sql_query(query, conn, params=[year, effective_league_id])
+        else:
+            # Fallback for old schema without league_id
+            query = """
+                SELECT pt.player_name, pt.fantasy_pos, pt.total_points, pt.pos_rank, 
+                       pt.overall_rank, pt.vorp_star,
+                       COUNT(CASE WHEN zs.week != 0 AND zs.weekly_points_ppr IS NOT NULL THEN 1 END) as games_played,
+                        (SELECT zs2.fantasy_team 
+                        FROM z_scores zs2 
+                        WHERE zs2.player_name = pt.player_name 
+                          AND zs2.year = pt.year 
+                          AND zs2.fantasy_team IS NOT NULL
+                        ORDER BY zs2.week DESC, zs2.id DESC
+                        LIMIT 1) as fantasy_team
+                FROM player_totals pt
+                LEFT JOIN z_scores zs ON pt.player_name = zs.player_name 
+                    AND pt.year = zs.year
+                WHERE pt.year = ?
+                GROUP BY pt.player_name, pt.fantasy_pos, pt.total_points, pt.pos_rank, 
+                         pt.overall_rank, pt.vorp_star
+                ORDER BY pt.vorp_star DESC
+            """
+            table = pd.read_sql_query(query, conn, params=[year, LEAGUE_ID])
         conn.close()
         
         # Calculate extrapolated VORP (handle division by zero)
@@ -925,9 +1004,15 @@ class TeamScoreboard(BaseModel):
     win_percentage: float
     games: List[GameResult]
 
+class TopScoringWeek(BaseModel):
+    team_name: str
+    points: float
+    week: int
+
 class ScoreboardResponse(BaseModel):
     year: int
     teams: List[TeamScoreboard]
+    top_scoring_week: Optional[TopScoringWeek] = None
 
 # NEW: Matchup detail models
 class PlayerScore(BaseModel):
@@ -976,18 +1061,18 @@ def get_trades(year: int):
             
             conn = sqlite3.connect('weekly_fantasy_data.db')
             
-            # Check if player_trades table exists for this year
+            # Check if player_trades table exists
             cursor = conn.cursor()
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (f'player_trades_{year}',))
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", ('player_trades',))
             table_exists = cursor.fetchone() is not None
             
             if not table_exists:
-                print(f"Table player_trades_{year} not found, falling back to calculation")
+                print(f"Table player_trades not found, falling back to calculation")
                 conn.close()
                 raise Exception("Database table not found")
             
             # Get trade data from database with VORP information
-            query = f"""
+            query = """
                 SELECT 
                     t.week, 
                     t.player_name, 
@@ -999,14 +1084,15 @@ def get_trades(year: int):
                     pt.vorp_star,
                     pt.total_points,
                     pt.fantasy_pos
-                FROM player_trades_{year} t
+                FROM player_trades t
                 LEFT JOIN player_totals pt 
                     ON t.player_name = pt.player_name 
                     AND pt.year = ?
+                WHERE t.year = ?
                 ORDER BY t.week, t.trade_id, t.player_name
             """
             
-            df = pd.read_sql_query(query, conn, params=[year])
+            df = pd.read_sql_query(query, conn, params=[year, year])
             conn.close()
             
             if len(df) == 0:
@@ -1026,9 +1112,9 @@ def get_trades(year: int):
             z_scores_query = """
                 SELECT player_name, week, z_week_ppr, fantasy_team, year
                 FROM z_scores
-                WHERE year = ?
+                WHERE year = ? AND league_id = ?
             """
-            z_scores_df = pd.read_sql_query(z_scores_query, conn, params=[year])
+            z_scores_df = pd.read_sql_query(z_scores_query, conn, params=[year, LEAGUE_ID])
             conn.close()
             
             for trade_id, group in df.groupby('trade_id'):
@@ -1053,7 +1139,7 @@ def get_trades(year: int):
                         team_b_name = row['to_team_name']
                     
                     # Calculate post-trade ZAV from z_scores
-                    # Filter: player_name, fantasy_team = to_team_name, week > trade_week
+                    # Filter: player_name, fantasy_team = to_team_name, week >= trade_week
                     player_name = row['player_name']
                     to_team_name = row['to_team_name']
                     
@@ -1062,7 +1148,7 @@ def get_trades(year: int):
                         player_z_scores = z_scores_df[
                             (z_scores_df['player_name'] == player_name) &
                             (z_scores_df['fantasy_team'] == to_team_name) &
-                            (z_scores_df['week'] > week)
+                            (z_scores_df['week'] >= week)
                         ]
                         
                         if len(player_z_scores) > 0:
@@ -1170,9 +1256,9 @@ def get_trades(year: int):
             z_scores_query = """
                 SELECT player_name, week, z_week_ppr, fantasy_team, year
                 FROM z_scores
-                WHERE year = ?
+                WHERE year = ? AND league_id = ?
             """
-            z_scores_df = pd.read_sql_query(z_scores_query, conn_z, params=[year])
+            z_scores_df = pd.read_sql_query(z_scores_query, conn_z, params=[year, LEAGUE_ID])
             conn_z.close()
             
             # Also get player_totals for total_points and fantasy_pos
@@ -1184,9 +1270,9 @@ def get_trades(year: int):
                     vorp_query = f"""
                         SELECT player_name, total_points, fantasy_pos
                         FROM player_totals
-                        WHERE year = ? AND player_name IN ({placeholders})
+                        WHERE year = ? AND league_id = ? AND player_name IN ({placeholders})
                     """
-                    vorp_df = pd.read_sql_query(vorp_query, conn_vorp, params=[year] + list(all_unique_player_names))
+                    vorp_df = pd.read_sql_query(vorp_query, conn_vorp, params=[year, LEAGUE_ID] + list(all_unique_player_names))
                     for _, vorp_row in vorp_df.iterrows():
                         vorp_map[vorp_row['player_name']] = {
                             'total_points': float(vorp_row['total_points']) if pd.notna(vorp_row['total_points']) else None,
@@ -1218,14 +1304,14 @@ def get_trades(year: int):
                     # Players in team_b_player_names were traded TO team_b (from team_a)
                     team_a_players = []
                     for name in team_a_player_names:
-                        # Player was traded TO team_a, so query z_scores where fantasy_team = team_a_name and week > trade_week
+                        # Player was traded TO team_a, so query z_scores where fantasy_team = team_a_name and week >= trade_week
                         team_a_name = team_meta.get(team_a, {}).get('name', f'Team {team_a}')
                         post_trade_zav = None
                         if not z_scores_df.empty:
                             player_z_scores = z_scores_df[
                                 (z_scores_df['player_name'] == name) &
                                 (z_scores_df['fantasy_team'] == team_a_name) &
-                                (z_scores_df['week'] > week)
+                                (z_scores_df['week'] >= week)
                             ]
                             if len(player_z_scores) > 0:
                                 post_trade_zav = player_z_scores['z_week_ppr'].fillna(0).sum()
@@ -1239,14 +1325,14 @@ def get_trades(year: int):
                     
                     team_b_players = []
                     for name in team_b_player_names:
-                        # Player was traded TO team_b, so query z_scores where fantasy_team = team_b_name and week > trade_week
+                        # Player was traded TO team_b, so query z_scores where fantasy_team = team_b_name and week >= trade_week
                         team_b_name = team_meta.get(team_b, {}).get('name', f'Team {team_b}')
                         post_trade_zav = None
                         if not z_scores_df.empty:
                             player_z_scores = z_scores_df[
                                 (z_scores_df['player_name'] == name) &
                                 (z_scores_df['fantasy_team'] == team_b_name) &
-                                (z_scores_df['week'] > week)
+                                (z_scores_df['week'] >= week)
                             ]
                             if len(player_z_scores) > 0:
                                 post_trade_zav = player_z_scores['z_week_ppr'].fillna(0).sum()
@@ -1328,9 +1414,9 @@ def get_trades(year: int):
         z_scores_query = """
             SELECT player_name, week, z_week_ppr, fantasy_team, year
             FROM z_scores
-            WHERE year = ?
+            WHERE year = ? AND league_id = ?
         """
-        z_scores_df = pd.read_sql_query(z_scores_query, conn_z, params=[year])
+        z_scores_df = pd.read_sql_query(z_scores_query, conn_z, params=[year, LEAGUE_ID])
         conn_z.close()
         
         # Also get player_totals for total_points and fantasy_pos
@@ -1342,9 +1428,9 @@ def get_trades(year: int):
                 vorp_query = f"""
                     SELECT player_name, total_points, fantasy_pos
                     FROM player_totals
-                    WHERE year = ? AND player_name IN ({placeholders})
+                    WHERE year = ? AND league_id = ? AND player_name IN ({placeholders})
                 """
-                vorp_df = pd.read_sql_query(vorp_query, conn_vorp, params=[year] + list(all_unique_player_names))
+                vorp_df = pd.read_sql_query(vorp_query, conn_vorp, params=[year, LEAGUE_ID] + list(all_unique_player_names))
                 for _, vorp_row in vorp_df.iterrows():
                     vorp_map[vorp_row['player_name']] = {
                         'total_points': float(vorp_row['total_points']) if pd.notna(vorp_row['total_points']) else None,
@@ -1374,13 +1460,13 @@ def get_trades(year: int):
                 # Players in team_b_player_names were traded TO team_b (from team_a)
                 team_a_players = []
                 for name in team_a_player_names:
-                    # Player was traded TO team_a, so query z_scores where fantasy_team = team_a_name and week > trade_week
+                    # Player was traded TO team_a, so query z_scores where fantasy_team = team_a_name and week >= trade_week
                     post_trade_zav = None
                     if not z_scores_df.empty:
                         player_z_scores = z_scores_df[
                             (z_scores_df['player_name'] == name) &
                             (z_scores_df['fantasy_team'] == team_a_name) &
-                            (z_scores_df['week'] > week)
+                            (z_scores_df['week'] >= week)
                         ]
                         if len(player_z_scores) > 0:
                             post_trade_zav = player_z_scores['z_week_ppr'].fillna(0).sum()
@@ -1394,13 +1480,13 @@ def get_trades(year: int):
                 
                 team_b_players = []
                 for name in team_b_player_names:
-                    # Player was traded TO team_b, so query z_scores where fantasy_team = team_b_name and week > trade_week
+                    # Player was traded TO team_b, so query z_scores where fantasy_team = team_b_name and week >= trade_week
                     post_trade_zav = None
                     if not z_scores_df.empty:
                         player_z_scores = z_scores_df[
                             (z_scores_df['player_name'] == name) &
                             (z_scores_df['fantasy_team'] == team_b_name) &
-                            (z_scores_df['week'] > week)
+                            (z_scores_df['week'] >= week)
                         ]
                         if len(player_z_scores) > 0:
                             post_trade_zav = player_z_scores['z_week_ppr'].fillna(0).sum()
@@ -1591,7 +1677,63 @@ def get_scoreboard(year: int):
         # Sort teams by win percentage (descending)
         teams.sort(key=lambda x: x.win_percentage, reverse=True)
         
-        return ScoreboardResponse(year=year, teams=teams)
+        # Get top scoring week for the year
+        top_scoring_week_data = None
+        try:
+            top_scoring_week = league.top_scoring_week()
+            if top_scoring_week:
+                # Handle different return formats from top_scoring_week()
+                if isinstance(top_scoring_week, tuple):
+                    # If it returns (team_name, points)
+                    top_scoring_week_data = TopScoringWeek(
+                        team_name=top_scoring_week[0],
+                        points=top_scoring_week[1],
+                        week=0  # We'll find the week below
+                    )
+                elif hasattr(top_scoring_week, 'team_name'):
+                    top_scoring_week_data = TopScoringWeek(
+                        team_name=top_scoring_week.team_name,
+                        points=getattr(top_scoring_week, 'points', 0),
+                        week=getattr(top_scoring_week, 'week', 0)
+                    )
+        except Exception as e:
+            print(f"Error getting top scoring week: {e}")
+        
+        # If we have team_name and points but not week, find the week manually
+        if top_scoring_week_data and top_scoring_week_data.week == 0:
+            max_points = top_scoring_week_data.points
+            top_team_name = top_scoring_week_data.team_name
+            top_week = None
+            for team_id, data in teams_data.items():
+                if data['name'] == top_team_name:
+                    for game in data['games']:
+                        if abs(game['score'] - max_points) < 0.1 and not game['is_playoff']:
+                            top_week = game['week']
+                            break
+                    if top_week:
+                        break
+            if top_week:
+                top_scoring_week_data.week = top_week
+        
+        # Fallback: find it manually if top_scoring_week() didn't work
+        if not top_scoring_week_data:
+            max_points = 0
+            top_team_name = None
+            top_week = None
+            for team_id, data in teams_data.items():
+                for game in data['games']:
+                    if game['score'] > max_points and not game['is_playoff']:
+                        max_points = game['score']
+                        top_team_name = data['name']
+                        top_week = game['week']
+            if top_team_name:
+                top_scoring_week_data = TopScoringWeek(
+                    team_name=top_team_name,
+                    points=max_points,
+                    week=top_week
+                )
+        
+        return ScoreboardResponse(year=year, teams=teams, top_scoring_week=top_scoring_week_data)
         
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Failed to get scoreboard: {e}")
@@ -1751,6 +1893,10 @@ class PlayerWeeklyStatsResponse(BaseModel):
     year: int
     max_week: int
     weekly_stats: List[WeeklyStat]
+    total_points: Optional[float] = None
+    total_zav: Optional[float] = None
+    fantasy_pos: Optional[str] = None
+    pos_rank: Optional[int] = None
 
 class TeamZAV(BaseModel):
     team_id: int
@@ -1783,10 +1929,10 @@ def get_team_zav_totals(year: int):
                 fantasy_team as team_name,
                 SUM(z_week_ppr) as total_zav
             FROM z_scores
-            WHERE year = ? AND fantasy_team IS NOT NULL
+            WHERE year = ? AND league_id = ? AND fantasy_team IS NOT NULL
             GROUP BY fantasy_team
             ORDER BY total_zav DESC
-        """, (year,))
+        """, (year, LEAGUE_ID))
         
         results = cursor.fetchall()
         conn.close()
@@ -1857,8 +2003,8 @@ def get_team_rosters(year: int):
         cursor.execute("""
             SELECT MAX(week) as max_week
             FROM z_scores
-            WHERE year = ?
-        """, (year,))
+            WHERE year = ? AND league_id = ?
+        """, (year, LEAGUE_ID))
         
         result = cursor.fetchone()
         max_week = result[0] if result and result[0] else None
@@ -1939,8 +2085,8 @@ def get_team_rosters(year: int):
                 pos_rank,
                 vorp_star
             FROM player_totals
-            WHERE player_name IN ({placeholders}) AND year = ?
-        """, list(all_player_names) + [year])
+            WHERE player_name IN ({placeholders}) AND year = ? AND league_id = ?
+        """, list(all_player_names) + [year, LEAGUE_ID])
         
         player_stats = {}
         for row in cursor.fetchall():
@@ -2002,8 +2148,11 @@ def get_player_weekly_stats(player_name: str, year: int = Query(...)):
     import sqlite3
     from urllib.parse import unquote
     
-    # Decode URL-encoded player name (handles special characters like "/" in "D/ST")
-    player_name = unquote(player_name)
+    # FastAPI automatically URL-decodes path parameters, so player_name should already be decoded
+    # However, if it was double-encoded, we need to decode again
+    # Check if it looks URL-encoded (contains %)
+    if '%' in player_name:
+        player_name = unquote(player_name)
     
     try:
         conn = sqlite3.connect('weekly_fantasy_data.db')
@@ -2012,23 +2161,71 @@ def get_player_weekly_stats(player_name: str, year: int = Query(...)):
         max_week_query = """
             SELECT MAX(week) as max_week
             FROM z_scores
-            WHERE year = ?
+            WHERE year = ? AND league_id = ?
         """
-        max_week_result = pd.read_sql_query(max_week_query, conn, params=[year])
+        max_week_result = pd.read_sql_query(max_week_query, conn, params=[year, LEAGUE_ID])
         max_week = int(max_week_result['max_week'].iloc[0]) if not max_week_result['max_week'].isna().iloc[0] else 17
         # Cap max_week at 17 for previous years (before 2025)
         if year < 2025:
             max_week = min(max_week, 17)
         
-        # Get all weekly stats for this player and year
+        # Get all weekly stats for this player and year, plus position
         query = """
-            SELECT week, z_week_ppr, weekly_points_ppr
+            SELECT week, z_week_ppr, weekly_points_ppr, fantasy_pos
             FROM z_scores
-            WHERE player_name = ? AND year = ?
+            WHERE player_name = ? AND year = ? AND league_id = ?
             ORDER BY week
         """
         
-        stats_df = pd.read_sql_query(query, conn, params=[player_name, year])
+        stats_df = pd.read_sql_query(query, conn, params=[player_name, year, LEAGUE_ID])
+        
+        # Get totals and positional ranking from player_totals
+        totals_query = """
+            SELECT total_points, vorp_star, fantasy_pos, pos_rank
+            FROM player_totals
+            WHERE player_name = ? AND year = ? AND league_id = ?
+        """
+        totals_df = pd.read_sql_query(totals_query, conn, params=[player_name, year, LEAGUE_ID])
+        
+        total_points = None
+        total_zav = None
+        fantasy_pos = None
+        pos_rank = None
+        
+        if not totals_df.empty:
+            total_points = float(totals_df['total_points'].iloc[0]) if pd.notna(totals_df['total_points'].iloc[0]) else None
+            total_zav = float(totals_df['vorp_star'].iloc[0]) if pd.notna(totals_df['vorp_star'].iloc[0]) else None
+            fantasy_pos = str(totals_df['fantasy_pos'].iloc[0]) if pd.notna(totals_df['fantasy_pos'].iloc[0]) else None
+            pos_rank = int(totals_df['pos_rank'].iloc[0]) if pd.notna(totals_df['pos_rank'].iloc[0]) else None
+        elif not stats_df.empty:
+            # Fallback: get position from z_scores if not in player_totals
+            fantasy_pos = str(stats_df['fantasy_pos'].iloc[0]) if pd.notna(stats_df['fantasy_pos'].iloc[0]) else None
+            # Calculate totals from weekly stats
+            total_points = float(stats_df['weekly_points_ppr'].sum()) if pd.notna(stats_df['weekly_points_ppr']).any() else None
+            total_zav = float(stats_df['z_week_ppr'].sum()) if pd.notna(stats_df['z_week_ppr']).any() else None
+        
+        # If no results found, try a case-insensitive search or check for D/ST variations
+        if stats_df.empty and ('/' in player_name or 'D/ST' in player_name.upper() or 'DST' in player_name.upper()):
+            # Try case-insensitive search for defense players
+            query_ci = """
+                SELECT week, z_week_ppr, weekly_points_ppr
+                FROM z_scores
+                WHERE UPPER(player_name) LIKE UPPER(?) AND year = ? AND league_id = ?
+                ORDER BY week
+            """
+            # Try matching with wildcard for team name variations
+            search_pattern = f"%{player_name}%"
+            stats_df = pd.read_sql_query(query_ci, conn, params=[search_pattern, year, LEAGUE_ID])
+            # If still no results, try exact case-insensitive match
+            if stats_df.empty:
+                query_exact = """
+                    SELECT week, z_week_ppr, weekly_points_ppr
+                    FROM z_scores
+                    WHERE UPPER(player_name) = UPPER(?) AND year = ? AND league_id = ?
+                    ORDER BY week
+                """
+                stats_df = pd.read_sql_query(query_exact, conn, params=[player_name, year, LEAGUE_ID])
+        
         conn.close()
         
         # Create a map of week -> stats
@@ -2060,11 +2257,66 @@ def get_player_weekly_stats(player_name: str, year: int = Query(...)):
             player_name=player_name,
             year=year,
             max_week=max_week,
-            weekly_stats=weekly_stats
+            weekly_stats=weekly_stats,
+            total_points=total_points,
+            total_zav=total_zav,
+            fantasy_pos=fantasy_pos,
+            pos_rank=pos_rank
         )
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get player weekly stats: {e}")
+
+@app.get("/players/{player_name}/headshot")
+def get_player_headshot(player_name: str):
+    """
+    Get headshot URL for a player from the headshots table.
+    Returns the headshot_url if available, or null if not found.
+    """
+    import sqlite3
+    from urllib.parse import unquote
+    
+    # FastAPI automatically URL-decodes path parameters, so player_name should already be decoded
+    # However, if it was double-encoded, we need to decode again
+    if '%' in player_name:
+        player_name = unquote(player_name)
+    
+    try:
+        conn = sqlite3.connect('weekly_fantasy_data.db')
+        cursor = conn.cursor()
+        
+        query = """
+            SELECT headshot_url
+            FROM headshots
+            WHERE player_name = ? AND league_id = ?
+        """
+        cursor.execute(query, (player_name, LEAGUE_ID))
+        result = cursor.fetchone()
+        
+        conn.close()
+        
+        if result and result[0]:
+            return {"headshot_url": result[0]}
+        else:
+            # Try case-insensitive search for D/ST players
+            conn = sqlite3.connect('weekly_fantasy_data.db')
+            cursor = conn.cursor()
+            query_ci = """
+                SELECT headshot_url
+                FROM headshots
+                WHERE UPPER(player_name) = UPPER(?) AND league_id = ?
+            """
+            cursor.execute(query_ci, (player_name, LEAGUE_ID))
+            result = cursor.fetchone()
+            conn.close()
+            
+            if result and result[0]:
+                return {"headshot_url": result[0]}
+            else:
+                return {"headshot_url": None}
+                
+    except Exception as e:
+        return {"headshot_url": None}
 
 # ======================
 # Waiver Activity
@@ -2112,11 +2364,12 @@ def get_waiver_activity(year: int):
             LEFT JOIN player_totals pt 
                 ON wa.player_name = pt.player_name 
                 AND wa.year = pt.year
-            WHERE wa.year = ?
+                AND wa.league_id = pt.league_id
+            WHERE wa.year = ? AND wa.league_id = ?
             ORDER BY wa.transaction_date DESC, wa.transaction_id
         """
         
-        df = pd.read_sql_query(query, conn, params=[year])
+        df = pd.read_sql_query(query, conn, params=[year, LEAGUE_ID])
         conn.close()
         
         transactions = []
@@ -2179,7 +2432,7 @@ def get_recent_trades(year: int):
         cursor = conn.cursor()
         
         # Check if trades table exists
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (f'player_trades_{year}',))
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", ('player_trades',))
         table_exists = cursor.fetchone() is not None
         
         if not table_exists:
@@ -2190,31 +2443,31 @@ def get_recent_trades(year: int):
             )
         
         # Get recent trades - get distinct trade_ids first
-        trade_query = f"""
+        trade_query = """
             SELECT DISTINCT
                 t.week,
                 t.trade_id
-            FROM player_trades_{year} t
+            FROM player_trades t
+            WHERE t.year = ?
             ORDER BY t.week DESC, t.trade_id DESC
             LIMIT 5
         """
         
-        trade_df = pd.read_sql_query(trade_query, conn)
+        trade_df = pd.read_sql_query(trade_query, conn, params=(year, LEAGUE_ID))
         
         # If no trades found for requested year, try 2024 as fallback
         if len(trade_df) == 0 and year == 2025:
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", ('player_trades_2024',))
-            if cursor.fetchone() is not None:
-                trade_query_2024 = """
-                    SELECT DISTINCT
-                        t.week,
-                        t.trade_id
-                    FROM player_trades_2024 t
-                    ORDER BY t.week DESC, t.trade_id DESC
-                    LIMIT 5
-                """
-                trade_df = pd.read_sql_query(trade_query_2024, conn)
-                year = 2024  # Use 2024 data
+            trade_query_2024 = """
+                SELECT DISTINCT
+                    t.week,
+                    t.trade_id
+                FROM player_trades t
+                WHERE t.year = 2024
+                ORDER BY t.week DESC, t.trade_id DESC
+                LIMIT 5
+            """
+            trade_df = pd.read_sql_query(trade_query_2024, conn)
+            year = 2024  # Use 2024 data
         
         trades = []
         for _, row in trade_df.iterrows():
@@ -2222,7 +2475,7 @@ def get_recent_trades(year: int):
             trade_id = str(row['trade_id'])
             
             # Get players for this trade with ZAV
-            players_query = f"""
+            players_query = """
                 SELECT 
                     t.player_name,
                     t.from_team_id,
@@ -2231,15 +2484,16 @@ def get_recent_trades(year: int):
                     t.to_team_name,
                     pt.vorp_star,
                     pt.fantasy_pos
-                FROM player_trades_{year} t
+                FROM player_trades t
                 LEFT JOIN player_totals pt 
                     ON t.player_name = pt.player_name 
                     AND pt.year = ?
-                WHERE t.trade_id = ?
+                    AND pt.league_id = t.league_id
+                WHERE t.year = ? AND t.league_id = ? AND t.week = ? AND t.trade_id = ?
                 ORDER BY t.player_name
             """
             
-            players_df = pd.read_sql_query(players_query, conn, params=[year, trade_id])
+            players_df = pd.read_sql_query(players_query, conn, params=[year, LEAGUE_ID, year, LEAGUE_ID, week, trade_id])
             
             if len(players_df) == 0:
                 continue
@@ -2308,7 +2562,7 @@ class RecentWaiversResponse(BaseModel):
     count: int
 
 @app.get("/recent-waivers/{year}", response_model=RecentWaiversResponse)
-def get_recent_waivers(year: int):
+def get_recent_waivers(year: int, league_id: Optional[int] = Query(None, description="League ID")):
     """
     Get recent waiver activity for a given year with player details and ZAV.
     Returns the 5 most recent waiver transactions sorted by date descending.
@@ -2334,18 +2588,22 @@ def get_recent_waivers(year: int):
             )
         
         # Get recent waiver transactions - get distinct transaction_ids first
+        # Handle both NULL league_id (old data) and specific league_id
         waiver_query = """
             SELECT DISTINCT
                 wa.transaction_id,
                 wa.transaction_date,
                 wa.team_name
             FROM waiver_activity wa
-            WHERE wa.year = ?
+            WHERE wa.year = ? AND (wa.league_id = ? OR wa.league_id IS NULL)
             ORDER BY wa.transaction_date DESC, wa.transaction_id DESC
             LIMIT 5
         """
         
-        waiver_df = pd.read_sql_query(waiver_query, conn, params=[year])
+        # Use provided league_id or fall back to default
+        effective_league_id = league_id or LEAGUE_ID
+        
+        waiver_df = pd.read_sql_query(waiver_query, conn, params=[year, effective_league_id])
         
         # If no waivers found for requested year, try 2024 as fallback
         if len(waiver_df) == 0 and year == 2025:
@@ -2355,11 +2613,11 @@ def get_recent_waivers(year: int):
                     wa.transaction_date,
                     wa.team_name
                 FROM waiver_activity wa
-                WHERE wa.year = 2024
+                WHERE wa.year = 2024 AND (wa.league_id = ? OR wa.league_id IS NULL)
                 ORDER BY wa.transaction_date DESC, wa.transaction_id DESC
                 LIMIT 5
             """
-            waiver_df = pd.read_sql_query(waiver_query_2024, conn)
+            waiver_df = pd.read_sql_query(waiver_query_2024, conn, params=[effective_league_id])
             year = 2024  # Use 2024 data
         
         transactions = []
@@ -2380,10 +2638,11 @@ def get_recent_waivers(year: int):
                     LEFT JOIN player_totals pt 
                         ON wa.player_name = pt.player_name 
                         AND wa.year = pt.year
-                    WHERE wa.transaction_id = ? AND wa.year = ?
+                        AND (wa.league_id = pt.league_id OR (wa.league_id IS NULL AND pt.league_id IS NULL))
+                    WHERE wa.transaction_id = ? AND wa.year = ? AND (wa.league_id = ? OR wa.league_id IS NULL)
                     ORDER BY wa.action_type DESC, wa.player_name
                 """
-                players_df = pd.read_sql_query(players_query, conn, params=[transaction_id, year])
+                players_df = pd.read_sql_query(players_query, conn, params=[transaction_id, year, LEAGUE_ID])
             else:
                 # If no transaction_id, match by date and team
                 players_query = """
@@ -2396,10 +2655,11 @@ def get_recent_waivers(year: int):
                     LEFT JOIN player_totals pt 
                         ON wa.player_name = pt.player_name 
                         AND wa.year = pt.year
-                    WHERE wa.transaction_date = ? AND wa.team_name = ? AND wa.year = ?
+                        AND wa.league_id = pt.league_id
+                    WHERE wa.transaction_date = ? AND wa.team_name = ? AND wa.year = ? AND wa.league_id = ?
                     ORDER BY wa.action_type DESC, wa.player_name
                 """
-                players_df = pd.read_sql_query(players_query, conn, params=[transaction_date, team_name, year])
+                players_df = pd.read_sql_query(players_query, conn, params=[transaction_date, team_name, year, LEAGUE_ID])
             
             if len(players_df) == 0:
                 continue
@@ -2438,6 +2698,194 @@ def get_recent_waivers(year: int):
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get recent waivers: {e}")
+
+
+# ======================
+# League Initialization Endpoints
+# ======================
+
+class LeagueStatusResponse(BaseModel):
+    league_id: int
+    status: str  # 'idle', 'initializing', 'ready', 'error'
+    message: str
+    progress: Optional[str] = None
+
+class InitializeLeagueResponse(BaseModel):
+    league_id: int
+    status: str
+    message: str
+
+def check_league_data_exists(league_id: int) -> bool:
+    """Check if data exists for a given league_id in the database"""
+    try:
+        conn = sqlite3.connect('weekly_fantasy_data.db')
+        cursor = conn.cursor()
+        
+        # Check if any tables have data for this league_id
+        tables_to_check = ['player_totals', 'z_scores', 'waiver_activity', 'player_trades']
+        
+        for table in tables_to_check:
+            try:
+                cursor.execute(f"SELECT COUNT(*) FROM {table} WHERE league_id = ? LIMIT 1", (league_id,))
+                result = cursor.fetchone()
+                if result and result[0] > 0:
+                    conn.close()
+                    return True
+            except sqlite3.OperationalError:
+                # Table might not exist or might not have league_id column
+                continue
+        
+        conn.close()
+        return False
+    except Exception as e:
+        print(f"Error checking league data: {e}")
+        return False
+
+def validate_league_id(league_id: int, year: int = 2024) -> bool:
+    """Validate that league_id is accessible via ESPN API"""
+    try:
+        # Use the same credentials as _get_league
+        espn_s2 = "AEC20e998honXS4Wi0Z8qzlJdam4%2F%2BaApa7apspnhKR0Npb%2FMsF5DuQsFUcHW%2FhPihQun9U6PGITOi2CkbdfDCkUc8druBVhAwT08Lzrvv8oZli8YAuTi9mIWg7YqtorCNOEKPxHpYswnT3q7b885tRDKBJpLCH0T2h4h1p%2B02SfdlDhjEB2gHqFk1xl6tJRNMBiCkZ8i5RttLW6ER9ZvLTmmAdb5ceZhQ27NEMiMf%2BjWSSvwBdnf2roxwt9baw33BVnnITqYVb8FXsaUwm7%2Bm0m9GLQ%2B66%2BU%2Brg%2BQngXm1ekA%3D%3D"
+        swid = "{B431504E-F779-4C49-B3E8-28DDF7409957}"
+        league = League(league_id=league_id, year=year, espn_s2=espn_s2, swid=swid)
+        # Try to access a property to validate
+        _ = league.teams
+        return True
+    except Exception as e:
+        print(f"Error validating league_id {league_id}: {e}")
+        return False
+
+@app.get("/api/league-status/{league_id}", response_model=LeagueStatusResponse)
+def get_league_status(league_id: int):
+    """Get the initialization status for a league"""
+    with status_lock:
+        status_info = league_status.get(league_id, {
+            'status': 'idle',
+            'message': 'Not initialized',
+            'progress': None
+        })
+        
+        # Also check if data exists in database
+        if status_info['status'] == 'idle' and check_league_data_exists(league_id):
+            status_info = {
+                'status': 'ready',
+                'message': 'Data already exists',
+                'progress': None
+            }
+    
+    return LeagueStatusResponse(
+        league_id=league_id,
+        status=status_info['status'],
+        message=status_info['message'],
+        progress=status_info.get('progress')
+    )
+
+def run_initialization(league_id: int, force: bool = False):
+    """Run league initialization in background thread"""
+    def status_callback(msg: str):
+        with status_lock:
+            league_status[league_id] = {
+                'status': 'initializing',
+                'message': msg,
+                'progress': msg
+            }
+    
+    try:
+        with status_lock:
+            league_status[league_id] = {
+                'status': 'initializing',
+                'message': 'Starting initialization...',
+                'progress': 'Initializing...'
+            }
+        
+        # Validate league_id first
+        status_callback("Validating league ID...")
+        if not validate_league_id(league_id):
+            with status_lock:
+                league_status[league_id] = {
+                    'status': 'error',
+                    'message': f'Invalid league ID: {league_id}. Could not access league via ESPN API.',
+                    'progress': None
+                }
+            return
+        
+        # Check if data exists
+        if not force and check_league_data_exists(league_id):
+            with status_lock:
+                league_status[league_id] = {
+                    'status': 'ready',
+                    'message': 'Data already exists. Use force=true to re-populate.',
+                    'progress': None
+                }
+            return
+        
+        # Import and run population
+        from source_players import populate_league_data
+        
+        status_callback("Populating database...")
+        results = populate_league_data(
+            league_id=league_id,
+            years=[2020, 2021, 2022, 2024, 2025],
+            clear_db=False,
+            status_callback=status_callback
+        )
+        
+        # Update status
+        with status_lock:
+            if results['years_failed']:
+                league_status[league_id] = {
+                    'status': 'ready',
+                    'message': f"Initialization complete with warnings. Processed: {results['years_processed']}, Failed: {[f['year'] for f in results['years_failed']]}",
+                    'progress': None
+                }
+            else:
+                league_status[league_id] = {
+                    'status': 'ready',
+                    'message': f"Initialization complete! Processed {len(results['years_processed'])} years.",
+                    'progress': None
+                }
+    
+    except Exception as e:
+        with status_lock:
+            league_status[league_id] = {
+                'status': 'error',
+                'message': f'Initialization failed: {str(e)}',
+                'progress': None
+            }
+        import traceback
+        traceback.print_exc()
+
+@app.post("/api/initialize-league/{league_id}", response_model=InitializeLeagueResponse)
+def initialize_league(league_id: int, force: bool = Query(False, description="Force re-population even if data exists")):
+    """Initialize/populate database for a given league_id"""
+    
+    # Check if already initializing
+    with status_lock:
+        current_status = league_status.get(league_id, {}).get('status', 'idle')
+        if current_status == 'initializing':
+            raise HTTPException(
+                status_code=409,
+                detail=f"League {league_id} is already being initialized"
+            )
+    
+    # Check if data exists and not forcing
+    if not force and check_league_data_exists(league_id):
+        return InitializeLeagueResponse(
+            league_id=league_id,
+            status='exists',
+            message='Data already exists for this league. Use force=true to re-populate.'
+        )
+    
+    # Start initialization in background thread
+    thread = threading.Thread(target=run_initialization, args=(league_id, force))
+    thread.daemon = True
+    thread.start()
+    
+    return InitializeLeagueResponse(
+        league_id=league_id,
+        status='started',
+        message='Initialization started in background. Check /api/league-status/{league_id} for progress.'
+    )
 
 
 # Uvicorn

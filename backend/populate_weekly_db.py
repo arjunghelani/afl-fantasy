@@ -29,6 +29,7 @@ def create_database():
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS weekly_points (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            league_id INTEGER NOT NULL,
             player_name TEXT NOT NULL,
             fantasy_pos TEXT NOT NULL,
             week INTEGER NOT NULL,
@@ -41,6 +42,7 @@ def create_database():
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS z_scores (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            league_id INTEGER NOT NULL,
             player_name TEXT NOT NULL,
             fantasy_pos TEXT NOT NULL,
             week INTEGER NOT NULL,
@@ -56,6 +58,7 @@ def create_database():
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS player_totals (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            league_id INTEGER NOT NULL,
             player_name TEXT NOT NULL,
             fantasy_pos TEXT NOT NULL,
             total_points REAL NOT NULL,
@@ -70,6 +73,7 @@ def create_database():
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS waiver_activity (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            league_id INTEGER NOT NULL,
             transaction_id INTEGER,
             year INTEGER NOT NULL,
             transaction_date TIMESTAMP,
@@ -316,7 +320,7 @@ def check_and_add_missing_drafted_players(year):
         conn.close()
 
 
-def populate_weekly_data(year):
+def populate_weekly_data(year, league_id=None):
     """
     Populate database with weekly fantasy data.
     
@@ -324,6 +328,10 @@ def populate_weekly_data(year):
     1. Collect player names from multiple sources (draft + weekly rosters)
     2. Get weekly stats for all those players
     3. Calculate z-scores, VORP, etc. and insert into database
+    
+    Args:
+        year: The year/season to populate
+        league_id: The league ID (if None, will be extracted from league object)
     """
     print(f"🚀 Starting database population for {year}...")
     
@@ -338,6 +346,13 @@ def populate_weekly_data(year):
         # Get league
         print("📡 Getting league data...")
         league = _get_league(year)
+        
+        # Get league_id if not provided
+        if league_id is None:
+            league_id = getattr(league, 'league_id', None) or getattr(league, 'id', None)
+            if league_id is None:
+                from trade_analysis import LEAGUE_ID
+                league_id = LEAGUE_ID
         
         # === Phase 1: Collect player names from multiple sources ===
         print("\n" + "="*60)
@@ -370,9 +385,9 @@ def populate_weekly_data(year):
         print("💾 Inserting weekly points...")
         for _, row in weekly_df.iterrows():
             cursor.execute('''
-                INSERT INTO weekly_points (player_name, fantasy_pos, week, weekly_points_ppr, year)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (row['player_name'], row['fantasy_pos'], row['week'], row['weekly_points_ppr'], year))
+                INSERT INTO weekly_points (league_id, player_name, fantasy_pos, week, weekly_points_ppr, year)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (league_id, row['player_name'], row['fantasy_pos'], row['week'], row['weekly_points_ppr'], year))
         
         # === Phase 4: Calculate z-scores, VORP, etc. ===
         print("\n" + "="*60)
@@ -439,10 +454,10 @@ def populate_weekly_data(year):
         print("💾 Inserting z-scores...")
         for _, row in z_scores.iterrows():
             cursor.execute('''
-                INSERT INTO z_scores (player_name, fantasy_pos, week, weekly_points_ppr, log_ppr, z_week_ppr, year)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', (row['player_name'], row['fantasy_pos'], row['week'], 
-                  row['weekly_points_ppr'], row['log_ppr'], row['z_week_ppr'], year))
+                INSERT INTO z_scores (league_id, player_name, fantasy_pos, week, weekly_points_ppr, log_ppr, z_week_ppr, year, fantasy_team)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (league_id, row['player_name'], row['fantasy_pos'], row['week'], 
+                  row['weekly_points_ppr'], row['log_ppr'], row['z_week_ppr'], year, None))
         
         # Calculate final VORP totals
         print("🏆 Calculating final VORP totals...")
@@ -460,9 +475,9 @@ def populate_weekly_data(year):
         print("💾 Inserting player totals...")
         for _, row in final_vorp.iterrows():
             cursor.execute('''
-                INSERT INTO player_totals (player_name, fantasy_pos, total_points, pos_rank, overall_rank, vorp_star, year)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', (row['player_name'], row['fantasy_pos'], 
+                INSERT INTO player_totals (league_id, player_name, fantasy_pos, total_points, pos_rank, overall_rank, vorp_star, year)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (league_id, row['player_name'], row['fantasy_pos'], 
                   result.groupby('player_name')['weekly_points_ppr'].sum().loc[row['player_name']],
                   row['vorp_star_rank_pos'], row['vorp_star_rank_overall'], row['vorp_star'], year))
         
@@ -653,7 +668,7 @@ def get_draft_stats(year):
     """
     player_names = collect_all_player_names(year)
     return get_weekly_stats_for_players(year, player_names)
-
+            
 def get_player_team_mapping(year, player_names):
     """
     Get which fantasy team each player was on each week by analyzing box scores.
@@ -742,7 +757,7 @@ def get_player_team_mapping(year, player_names):
     return player_team_map
 
 
-def populate_waiver_activity(year):
+def populate_waiver_activity(year, league_id=None):
     
     """
     Populate waiver_activity table with transactions from ESPN API.
@@ -770,6 +785,13 @@ def populate_waiver_activity(year):
         #     print(f"  ✅ Added transaction_id column")
         
         league = _get_league(year)
+        
+        # Get league_id if not provided
+        if league_id is None:
+            league_id = getattr(league, 'league_id', None) or getattr(league, 'id', None)
+            if league_id is None:
+                from trade_analysis import LEAGUE_ID
+                league_id = LEAGUE_ID
         
         # Get all transactions from ESPN with pagination
         print("  📡 Fetching transactions from ESPN...")
@@ -900,6 +922,7 @@ def populate_waiver_activity(year):
                             
                             # Collect row data
                             rows_to_insert.append((
+                                league_id,
                                 transaction_id,
                                 year,
                                 transaction_date,
@@ -935,8 +958,8 @@ def populate_waiver_activity(year):
             print(f"  💾 Inserting {len(rows_to_insert)} waiver transaction rows...")
             cursor.executemany('''
                 INSERT OR IGNORE INTO waiver_activity 
-                (transaction_id, year, transaction_date, team_id, team_name, action_type, player_name)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                (league_id, transaction_id, year, transaction_date, team_id, team_name, action_type, player_name)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ''', rows_to_insert)
             inserted_count = len(rows_to_insert)
         else:
@@ -953,7 +976,7 @@ def populate_waiver_activity(year):
         traceback.print_exc()
     finally:
         conn.close()
-
+            
 
 if __name__ == "__main__":
     # conn = create_database()

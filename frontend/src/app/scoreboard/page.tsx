@@ -1,6 +1,68 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import Link from 'next/link';
+
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
+const YEARS = [2020, 2021, 2022, 2024, 2025] as const;
+
+const ZAV_CUTOFFS = {
+  red: -2,
+  orange: 2.5,
+  yellow: 6,
+  yellowGreen: 10,
+};
+
+function getZavBrightColor(vorp: number | null): string {
+  if (vorp === null || vorp === 0) {
+    return 'rgb(131, 131, 131)';
+  }
+  if (vorp < ZAV_CUTOFFS.red) {
+    return 'rgb(220, 70, 70)';
+  } else if (vorp < ZAV_CUTOFFS.orange) {
+    return 'rgb(250, 130, 60)';
+  } else if (vorp < ZAV_CUTOFFS.yellow) {
+    return 'rgb(245, 210, 75)';
+  } else if (vorp < ZAV_CUTOFFS.yellowGreen) {
+    return 'rgb(160, 220, 80)';
+  } else {
+    return 'rgb(16, 185, 129)';
+  }
+}
+
+function getFantasyPointsGradient(points: number | null): string {
+  if (points === null) {
+    return 'linear-gradient(135deg, rgb(131, 131, 131), rgb(100, 100, 100))';
+  }
+  if (points <= 5) {
+    return 'linear-gradient(135deg, rgb(220, 70, 70), rgb(180, 30, 30))';
+  } else if (points <= 10) {
+    return 'linear-gradient(135deg, rgb(250, 130, 60), rgb(210, 90, 20))';
+  } else if (points <= 15) {
+    return 'linear-gradient(135deg, rgb(245, 210, 75), rgb(225, 170, 35))';
+  } else if (points <= 20) {
+    return 'linear-gradient(135deg, rgb(160, 220, 80), rgb(120, 180, 40))';
+  } else {
+    return 'linear-gradient(135deg, rgb(16, 185, 129), rgb(5, 150, 105))';
+  }
+}
+
+function getFantasyPointsTextColor(points: number | null): string {
+  if (points === null) {
+    return 'rgb(40, 40, 40)';
+  }
+  if (points <= 5) {
+    return 'rgb(90, 10, 10)';
+  } else if (points <= 10) {
+    return 'rgb(110, 35, 5)';
+  } else if (points <= 15) {
+    return 'rgb(110, 85, 5)';
+  } else if (points <= 20) {
+    return 'rgb(50, 75, 10)';
+  } else {
+    return 'rgb(1, 50, 20)';
+  }
+}
 
 type GameResult = {
   week: number;
@@ -22,9 +84,16 @@ type TeamScoreboard = {
   games: GameResult[];
 };
 
+type TopScoringWeek = {
+  team_name: string;
+  points: number;
+  week: number;
+};
+
 type ScoreboardResponse = {
   year: number;
   teams: TeamScoreboard[];
+  top_scoring_week?: TopScoringWeek | null;
 };
 
 type PlayerScore = {
@@ -58,16 +127,42 @@ type GameDetail = {
   margin: number;
 };
 
+interface WeeklyStat {
+  week: number;
+  z_week_ppr: number | null;
+  weekly_points_ppr: number | null;
+}
+
+interface PlayerWeeklyStatsResponse {
+  player_name: string;
+  year: number;
+  max_week: number;
+  weekly_stats: WeeklyStat[];
+  total_points?: number | null;
+  total_zav?: number | null;
+  fantasy_pos?: string | null;
+  pos_rank?: number | null;
+}
+
+type SelectedPlayerData = {
+  headshotUrl?: string | null;
+  playerName: string;
+  year: number;
+  selectedYear: number;
+  availableYears: number[];
+  position?: { x: number; y: number };
+  loading: boolean;
+  stats?: PlayerWeeklyStatsResponse;
+};
+
 async function fetchScoreboard(year: number): Promise<ScoreboardResponse> {
-  const base = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
-  const res = await fetch(`${base}/scoreboard/${year}`, { cache: "no-store" });
+  const res = await fetch(`${API_BASE}/scoreboard/${year}`, { cache: "no-store" });
   if (!res.ok) throw new Error(`Failed to fetch scoreboard for ${year}`);
   return res.json();
 }
 
 async function fetchMatchupDetail(year: number, week: number, team1: string, team2: string): Promise<MatchupDetail> {
-  const base = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
-  const res = await fetch(`${base}/matchup/${year}/${week}?team1=${encodeURIComponent(team1)}&team2=${encodeURIComponent(team2)}`, { cache: "no-store" });
+  const res = await fetch(`${API_BASE}/matchup/${year}/${week}?team1=${encodeURIComponent(team1)}&team2=${encodeURIComponent(team2)}`, { cache: "no-store" });
   if (!res.ok) throw new Error(`Failed to fetch matchup details for ${team1} vs ${team2}`);
   return res.json();
 }
@@ -77,13 +172,15 @@ function GameBubble({
   week, 
   onClick,
   isEliminated = false,
-  isChampionship = false
+  isChampionship = false,
+  isTopScoringWeek = false
 }: { 
   game: GameResult | null; 
   week: number; 
   onClick: () => void;
   isEliminated?: boolean;
   isChampionship?: boolean;
+  isTopScoringWeek?: boolean;
 }) {
   if (!game) {
     return (
@@ -98,6 +195,39 @@ function GameBubble({
 
   const isWin = game.result === "W";
   const isPlayoff = game.is_playoff;
+  
+  // If this is the top scoring week, show a white star with rounded edges
+  if (isTopScoringWeek) {
+    return (
+      <div 
+        className="w-12 h-12 flex items-center justify-center cursor-pointer transition-all hover:scale-110 relative"
+        onClick={onClick}
+      >
+        <svg 
+          className="absolute inset-0 w-full h-full text-white" 
+          fill="currentColor" 
+          viewBox="0 0 24 24"
+          style={{ 
+            filter: 'drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3)) drop-shadow(0 0 4px rgba(255, 255, 255, 0.5))',
+            transform: 'scale(1.15)',
+          }}
+        >
+          <path 
+            d="M12 2.5l2.8 5.7 6.2.9-4.5 4.4 1.1 6.3-5.6-2.9-5.6 2.9 1.1-6.3-4.5-4.4 6.2-.9L12 2.5z"
+            style={{ 
+              fillRule: 'evenodd', 
+              clipRule: 'evenodd',
+              stroke: 'rgba(255, 255, 255, 0.8)',
+              strokeWidth: '0.5',
+              strokeLinejoin: 'round',
+              strokeLinecap: 'round',
+            }}
+          />
+        </svg>
+        <span className="text-black font-bold text-xs relative z-10">W</span>
+      </div>
+    );
+  }
   
   return (
     <div 
@@ -130,12 +260,16 @@ function GameDetailModal({
   matchup, 
   isOpen, 
   onClose,
-  loading = false
+  loading = false,
+  onPlayerClick,
+  year
 }: { 
   matchup: MatchupDetail | null; 
   isOpen: boolean; 
   onClose: () => void;
   loading?: boolean;
+  onPlayerClick?: (playerName: string, year: number, event?: React.MouseEvent<HTMLSpanElement>) => void;
+  year: number;
 }) {
   if (!isOpen) return null;
 
@@ -301,20 +435,20 @@ function GameDetailModal({
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
-                <tr className="border-b border-gray-200 dark:border-gray-700">
-                  <th className="text-left py-3 px-4 font-medium text-gray-900 dark:text-white">
+                <tr className="bg-gradient-to-r from-slate-800 to-slate-700">
+                  <th className="text-left py-3 px-4 text-sm font-semibold text-white uppercase tracking-wider">
                     {matchup.home_team.team_name}
                   </th>
-                  <th className="text-center py-3 px-4 font-medium text-gray-900 dark:text-white">
+                  <th className="text-center py-3 px-4 text-sm font-semibold text-white uppercase tracking-wider">
                     Points
                   </th>
-                  <th className="text-center py-3 px-4 font-medium text-gray-900 dark:text-white">
+                  <th className="text-center py-3 px-4 text-sm font-semibold text-white uppercase tracking-wider">
                     Pos
                   </th>
-                  <th className="text-center py-3 px-4 font-medium text-gray-900 dark:text-white">
+                  <th className="text-center py-3 px-4 text-sm font-semibold text-white uppercase tracking-wider">
                     Points
                   </th>
-                  <th className="text-right py-3 px-4 font-medium text-gray-900 dark:text-white">
+                  <th className="text-right py-3 px-4 text-sm font-semibold text-white uppercase tracking-wider">
                     {matchup.away_team.team_name}
                   </th>
                 </tr>
@@ -330,7 +464,12 @@ function GameDetailModal({
                     <tr key={`${position}-${index}`} className="border-b border-gray-100 dark:border-gray-800">
                       <td className="py-3 px-4 text-gray-900 dark:text-white">
                         <div className="flex items-center gap-2">
-                          <span>{homePlayer ? homePlayer.player_name : '—'}</span>
+                          <span 
+                            className={homePlayer && onPlayerClick ? 'cursor-pointer hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors' : ''}
+                            onClick={(e) => homePlayer && onPlayerClick?.(homePlayer.player_name, year, e)}
+                          >
+                            {homePlayer ? homePlayer.player_name : '—'}
+                          </span>
                           {comparison && comparison.homeWins && (
                             <span className="text-emerald-600 dark:text-emerald-400 text-sm">✓</span>
                           )}
@@ -361,7 +500,12 @@ function GameDetailModal({
                       </td>
                       <td className="py-3 px-4 text-right text-gray-900 dark:text-white">
                         <div className="flex items-center justify-end gap-2">
-                          <span>{awayPlayer ? awayPlayer.player_name : '—'}</span>
+                          <span 
+                            className={awayPlayer && onPlayerClick ? 'cursor-pointer hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors' : ''}
+                            onClick={(e) => awayPlayer && onPlayerClick?.(awayPlayer.player_name, year, e)}
+                          >
+                            {awayPlayer ? awayPlayer.player_name : '—'}
+                          </span>
                           {comparison && comparison.awayWins && (
                             <span className="text-emerald-600 dark:text-emerald-400 text-sm">✓</span>
                           )}
@@ -387,8 +531,140 @@ export default function ScoreboardPage() {
   const [selectedMatchup, setSelectedMatchup] = useState<MatchupDetail | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [loadingMatchup, setLoadingMatchup] = useState(false);
+  const [selectedPlayers, setSelectedPlayers] = useState<Map<string, SelectedPlayerData>>(new Map());
 
-  const years = [2020, 2021, 2022, 2024];
+  const years = [2020, 2021, 2022, 2024, 2025];
+
+  const hasPlayerData = (data: PlayerWeeklyStatsResponse): boolean => {
+    return data.weekly_stats.some(stat => stat.weekly_points_ppr !== null || stat.z_week_ppr !== null);
+  };
+
+  const handlePlayerClick = async (playerName: string, year: number, event?: React.MouseEvent<HTMLSpanElement>) => {
+    const playerKey = `${playerName}_${year}`;
+    
+    if (selectedPlayers.has(playerKey)) {
+      return;
+    }
+    
+    // Always center pop-ups, stack vertically when multiple
+    const existingPopups = Array.from(selectedPlayers.values());
+    
+    setSelectedPlayers(prev => {
+      const newMap = new Map(prev);
+      newMap.set(playerKey, { playerName, year, selectedYear: year, availableYears: [year], position: { x: 0, y: 0 }, loading: true });
+      return newMap;
+    });
+    
+    try {
+      // Fetch stats and headshot in parallel
+      const [statsResponse, headshotResponse] = await Promise.all([
+        fetch(`${API_BASE}/players/${encodeURIComponent(playerName)}/weekly-stats?year=${year}`),
+        fetch(`${API_BASE}/players/${encodeURIComponent(playerName)}/headshot`)
+      ]);
+      
+      if (!statsResponse.ok) {
+        throw new Error('Failed to fetch player stats');
+      }
+      const data: PlayerWeeklyStatsResponse = await statsResponse.json();
+      
+      // Get headshot URL
+      let headshotUrl: string | null = null;
+      if (headshotResponse.ok) {
+        const headshotData = await headshotResponse.json();
+        headshotUrl = headshotData.headshot_url || null;
+      }
+      
+      const availableYears: number[] = [];
+      const yearChecks = YEARS.map(async (checkYear) => {
+        try {
+          const checkResponse = await fetch(`${API_BASE}/players/${encodeURIComponent(playerName)}/weekly-stats?year=${checkYear}`);
+          if (checkResponse.ok) {
+            const checkData: PlayerWeeklyStatsResponse = await checkResponse.json();
+            if (hasPlayerData(checkData)) {
+              availableYears.push(checkYear);
+            }
+          }
+        } catch (err) {
+          // Silently skip years that fail
+        }
+      });
+      
+      await Promise.all(yearChecks);
+      availableYears.sort();
+      
+      setSelectedPlayers(prev => {
+        const newMap = new Map(prev);
+        const existing = newMap.get(playerKey);
+        if (existing) {
+          newMap.set(playerKey, { 
+            ...existing, 
+            stats: data, 
+            headshotUrl: headshotUrl,
+            availableYears: availableYears.length > 0 ? availableYears : [year],
+            loading: false 
+          });
+        }
+        return newMap;
+      });
+    } catch (err) {
+      console.error('Error fetching player stats:', err);
+      setSelectedPlayers(prev => {
+        const newMap = new Map(prev);
+        newMap.delete(playerKey);
+        return newMap;
+      });
+    }
+  };
+
+  const closePlayerPopup = (playerKey: string) => {
+    setSelectedPlayers(prev => {
+      const newMap = new Map(prev);
+      newMap.delete(playerKey);
+      return newMap;
+    });
+  };
+
+  const handleYearChange = async (playerKey: string, newYear: number) => {
+    const playerData = selectedPlayers.get(playerKey);
+    if (!playerData) return;
+
+    setSelectedPlayers(prev => {
+      const newMap = new Map(prev);
+      const existing = newMap.get(playerKey);
+      if (existing) {
+        newMap.set(playerKey, { ...existing, selectedYear: newYear, loading: true });
+      }
+      return newMap;
+    });
+
+    try {
+      const response = await fetch(`${API_BASE}/players/${encodeURIComponent(playerData.playerName)}/weekly-stats?year=${newYear}`);
+      if (!response.ok) {
+        throw new Error('Failed to fetch player stats');
+      }
+      const data: PlayerWeeklyStatsResponse = await response.json();
+      
+      setSelectedPlayers(prev => {
+        const newMap = new Map(prev);
+        const existing = newMap.get(playerKey);
+        if (existing) {
+          newMap.set(playerKey, { ...existing, stats: data, loading: false });
+        }
+        return newMap;
+      });
+    } catch (err) {
+      console.error('Error fetching player stats:', err);
+      
+      setSelectedPlayers(prev => {
+        const newMap = new Map(prev);
+        const existing = newMap.get(playerKey);
+        if (existing) {
+          newMap.set(playerKey, { ...existing, loading: false });
+        }
+        return newMap;
+      });
+    }
+  };
 
   useEffect(() => {
     loadScoreboard();
@@ -569,6 +845,28 @@ export default function ScoreboardPage() {
             Scoreboard
           </h1>
           
+          {/* Navigation */}
+          <nav className="flex justify-center items-center gap-3 mb-6 flex-wrap">
+            <Link href="/" className="px-5 py-2.5 rounded-lg bg-white/90 text-slate-700 text-sm font-semibold hover:bg-slate-100 active:bg-slate-200 transition-all duration-150 shadow-sm hover:shadow active:shadow-none active:scale-[0.98]">
+              Home
+            </Link>
+            <Link href="/players" className="px-5 py-2.5 rounded-lg bg-white/90 text-slate-700 text-sm font-semibold hover:bg-slate-100 active:bg-slate-200 transition-all duration-150 shadow-sm hover:shadow active:shadow-none active:scale-[0.98]">
+              Players
+            </Link>
+            <Link href="/trades" className="px-5 py-2.5 rounded-lg bg-white/90 text-slate-700 text-sm font-semibold hover:bg-slate-100 active:bg-slate-200 transition-all duration-150 shadow-sm hover:shadow active:shadow-none active:scale-[0.98]">
+              Trades
+            </Link>
+            <Link href="/waivers" className="px-5 py-2.5 rounded-lg bg-white/90 text-slate-700 text-sm font-semibold hover:bg-slate-100 active:bg-slate-200 transition-all duration-150 shadow-sm hover:shadow active:shadow-none active:scale-[0.98]">
+              Waivers
+            </Link>
+            <Link href="/scoreboard" className="px-5 py-2.5 rounded-lg bg-white/90 text-slate-700 text-sm font-semibold hover:bg-slate-100 active:bg-slate-200 transition-all duration-150 shadow-sm hover:shadow active:shadow-none active:scale-[0.98]">
+              Scoreboard
+            </Link>
+            <Link href="/draft" className="px-5 py-2.5 rounded-lg bg-white/90 text-slate-700 text-sm font-semibold hover:bg-slate-100 active:bg-slate-200 transition-all duration-150 shadow-sm hover:shadow active:shadow-none active:scale-[0.98]">
+              Draft
+            </Link>
+          </nav>
+          
           {/* Year Selector */}
           <div className="flex justify-center gap-2 mb-6">
             {years.map(year => (
@@ -591,30 +889,30 @@ export default function ScoreboardPage() {
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full">
-              <thead className="bg-gray-50 dark:bg-gray-700">
-                <tr>
-                  <th className="sticky left-0 z-10 bg-gray-50 dark:bg-gray-700 px-4 py-3 text-left text-sm font-medium text-gray-900 dark:text-white">
+              <thead>
+                <tr className="bg-gradient-to-r from-slate-800 to-slate-700">
+                  <th className="sticky left-0 z-10 bg-gradient-to-r from-slate-800 to-slate-700 px-4 py-3 text-left text-sm font-semibold text-white uppercase tracking-wider">
                     Team
                   </th>
-                  <th className="px-4 py-3 text-center text-sm font-medium text-gray-900 dark:text-white">
+                  <th className="px-4 py-3 text-center text-sm font-semibold text-white uppercase tracking-wider">
                     Record
                   </th>
-                  <th className="px-4 py-3 text-center text-sm font-medium text-gray-900 dark:text-white">
+                  <th className="px-4 py-3 text-center text-sm font-semibold text-white uppercase tracking-wider">
                     Points
                   </th>
                   {/* Regular Season Weeks */}
                   {getRegularSeasonWeeks().map(week => (
-                    <th key={`reg-${week}`} className="px-2 py-3 text-center text-sm font-medium text-gray-900 dark:text-white min-w-[60px]">
+                    <th key={`reg-${week}`} className="px-2 py-3 text-center text-sm font-semibold text-white uppercase tracking-wider min-w-[60px]">
                       W{week}
                     </th>
                   ))}
                   {/* Separator header */}
-                  <th className="px-1 py-3 text-center relative">
+                  <th className="px-1 py-3 text-center relative bg-gradient-to-r from-slate-800 to-slate-700">
                     <div className="absolute left-1/2 top-0 bottom-0 w-px bg-gray-300 dark:bg-gray-600 transform -translate-x-1/2"></div>
                   </th>
                   {/* Playoff Weeks */}
                   {getPlayoffWeeks().map(week => (
-                    <th key={`playoff-${week}`} className="px-2 py-3 text-center text-sm font-medium text-gray-900 dark:text-white min-w-[60px]">
+                    <th key={`playoff-${week}`} className="px-2 py-3 text-center text-sm font-semibold text-white uppercase tracking-wider min-w-[60px]">
                       W{week}
                     </th>
                   ))}
@@ -623,7 +921,7 @@ export default function ScoreboardPage() {
               <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
                 {scoreboard.teams.map((team, index) => (
                   <tr key={team.team_name} className="hover:bg-gray-50 dark:hover:bg-gray-700 group">
-                    <td className="sticky left-0 z-10 bg-white dark:bg-gray-800 group-hover:bg-gray-50 dark:group-hover:bg-gray-700 px-4 py-3">
+                    <td className="sticky left-0 z-10 bg-white dark:bg-gray-800 group-hover:bg-gray-50 dark:group-hover:bg-gray-700 px-4 py-3 border-r border-gray-200 dark:border-gray-700">
                       <div className="flex items-center">
                         <span 
                           className={`text-sm font-bold ${
@@ -653,12 +951,16 @@ export default function ScoreboardPage() {
                     {/* Regular Season Games */}
                     {getRegularSeasonWeeks().map(week => {
                       const game = getGameForWeek(team, week);
+                      const isTopScoringWeek = scoreboard?.top_scoring_week && 
+                                               scoreboard.top_scoring_week.team_name === team.team_name &&
+                                               scoreboard.top_scoring_week.week === week;
                       return (
                         <td key={`reg-${week}`} className="px-2 py-3 text-center">
                           <GameBubble
                             game={game}
                             week={week}
                             onClick={() => game && handleGameClick(team, game)}
+                            isTopScoringWeek={isTopScoringWeek}
                           />
                         </td>
                       );
@@ -672,6 +974,9 @@ export default function ScoreboardPage() {
                       const game = getGameForWeek(team, week);
                       const isEliminated = isTeamEliminated(team, week);
                       const isChampionship = isChampionshipWinner(team, week);
+                      const isTopScoringWeek = scoreboard?.top_scoring_week && 
+                                               scoreboard.top_scoring_week.team_name === team.team_name &&
+                                               scoreboard.top_scoring_week.week === week;
                       return (
                         <td key={`playoff-${week}`} className="px-2 py-3 text-center">
                           <GameBubble
@@ -680,6 +985,7 @@ export default function ScoreboardPage() {
                             onClick={() => game && handleGameClick(team, game)}
                             isEliminated={isEliminated}
                             isChampionship={isChampionship}
+                            isTopScoringWeek={isTopScoringWeek}
                           />
                         </td>
                       );
@@ -724,7 +1030,163 @@ export default function ScoreboardPage() {
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
         loading={loadingMatchup}
+        onPlayerClick={handlePlayerClick}
+        year={selectedYear}
       />
+
+      {/* Player Weekly Stats Popups */}
+        {Array.from(selectedPlayers.entries()).map(([playerKey, playerData], index) => {
+          // Calculate position for this pop-up in the centered stack
+          const allPopups = Array.from(selectedPlayers.entries());
+          const popupHeight = 200;
+          const popupSpacing = 20;
+          const totalHeight = allPopups.length * (popupHeight + popupSpacing) - popupSpacing;
+          const startY = -totalHeight / 2;
+          const thisPopupY = startY + index * (popupHeight + popupSpacing);
+          
+          return (
+          <div 
+            key={playerKey} 
+            className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto pointer-events-none"
+            onClick={() => closePlayerPopup(playerKey)}
+          >
+            <div 
+              className="relative bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 shadow-2xl p-6 transition-all duration-300 ease-out pointer-events-auto"
+              style={{
+                transform: `translateY(${thisPopupY}px)`,
+                maxWidth: 'calc(100vw - 32px)',
+                width: 'auto',
+                minWidth: '400px',
+                animation: 'fadeIn 0.3s ease-out forwards',
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+            <div className="flex items-center justify-between mb-4 relative">
+              {/* Headshot - positioned to left of name, top 1/3 above card */}
+              {playerData.headshotUrl && (
+                <div className="absolute -top-16 left-0 z-10" style={{ width: '80px', height: '120px' }}>
+                  <img 
+                    src={playerData.headshotUrl} 
+                    alt={playerData.playerName}
+                    className="w-full h-full object-cover"
+                    style={{
+                      clipPath: 'polygon(0 0, 100% 0, 100% 85%, 50% 100%, 0 85%)',
+                      filter: 'drop-shadow(0 4px 8px rgba(0, 0, 0, 0.3))',
+                    }}
+                  />
+                </div>
+              )}
+              <div className="flex-1" style={{ marginLeft: playerData.headshotUrl ? '100px' : '0' }}>
+                <h2 className="text-xl font-bold text-gray-900 dark:text-white">
+                  {playerData.playerName}
+                </h2>
+                <div className="flex items-center gap-2 mt-2">
+                  <label className="text-sm text-gray-500 dark:text-gray-400">Year:</label>
+                  <select
+                    value={playerData.selectedYear}
+                    onChange={(e) => handleYearChange(playerKey, parseInt(e.target.value))}
+                    className="text-sm bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded px-3 py-1.5 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {playerData.availableYears.map(year => (
+                      <option key={year} value={year}>{year}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <button
+                onClick={() => closePlayerPopup(playerKey)}
+                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors ml-4"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {playerData.loading ? (
+              <div className="flex items-center justify-center py-8">
+                <div className="text-sm text-gray-500 dark:text-gray-400">Loading...</div>
+              </div>
+            ) : playerData.stats ? (
+              <>
+                <div className="flex gap-2 items-center overflow-x-auto" style={{ maxWidth: 'calc(100vw - 80px)', scrollbarWidth: 'thin' }}>
+                  {playerData.stats.weekly_stats.map((stat: WeeklyStat, statIndex: number) => {
+                    const hasData = stat.z_week_ppr !== null && stat.weekly_points_ppr !== null;
+                    const points = stat.weekly_points_ppr;
+                    const gradient = getFantasyPointsGradient(points);
+                    const textColor = getFantasyPointsTextColor(points);
+
+                    return (
+                      <div key={stat.week} className="flex items-center gap-2">
+                        <div
+                          className={`rounded-md p-2 border border-gray-200 dark:border-gray-600 flex-shrink-0 w-16 ${hasData ? '' : 'opacity-50'}`}
+                          style={hasData ? { background: gradient } : {}}
+                        >
+                          <div className={`text-xs font-semibold mb-1 text-center`} style={hasData ? { color: textColor } : {}}>
+                            W{stat.week}
+                          </div>
+                          {hasData ? (
+                            <>
+                              <div className={`text-base font-bold text-center mb-0.5`} style={{ color: textColor }}>
+                                {stat.weekly_points_ppr?.toFixed(1) ?? 'N/A'}
+                              </div>
+                              <div className={`text-xs text-center italic opacity-90`} style={{ color: textColor }}>
+                                z: {stat.z_week_ppr?.toFixed(2) ?? 'N/A'}
+                              </div>
+                            </>
+                          ) : (
+                            <div className={`text-[10px] text-center text-gray-500 dark:text-gray-400`}>
+                              N/A
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-600 flex items-center justify-center gap-6">
+                  {playerData.stats.total_points !== null && playerData.stats.total_points !== undefined && (() => {
+                    const gamesPlayed = playerData.stats.weekly_stats.filter(
+                      stat => stat.week !== 0 && stat.weekly_points_ppr !== null && stat.weekly_points_ppr !== undefined
+                    ).length;
+                    const ppg = gamesPlayed > 0 ? playerData.stats.total_points / gamesPlayed : 0;
+                    return (
+                      <div className="flex items-center gap-2">
+                        <span className="text-white font-bold text-lg">PPG:</span>
+                        <span style={{ color: getZavBrightColor(playerData.stats.total_zav ?? null) }} className="font-semibold text-xl">
+                          {ppg.toFixed(1)}
+                        </span>
+                      </div>
+                    );
+                  })()}
+                  {playerData.stats.total_zav !== null && playerData.stats.total_zav !== undefined && (
+                    <div className="flex items-center gap-2 ml-6">
+                      <span className="text-white font-bold text-lg">ZAV:</span>
+                      <span style={{ color: getZavBrightColor(playerData.stats.total_zav) }} className="font-semibold text-xl">
+                        {playerData.stats.total_zav.toFixed(2)}
+                      </span>
+                    </div>
+                  )}
+                  {playerData.stats.fantasy_pos && playerData.stats.pos_rank !== null && playerData.stats.pos_rank !== undefined && (
+                    <div className="flex items-center gap-0 ml-6">
+                      <span className="text-white font-bold text-lg">{playerData.stats.fantasy_pos}</span>
+                      <span style={{ color: getZavBrightColor(playerData.stats.total_zav ?? null) }} className="font-semibold text-xl">
+                        {playerData.stats.pos_rank}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </>
+            ) : (
+              <div className="text-center py-8 text-sm text-gray-500 dark:text-gray-400">
+                No weekly stats available
+              </div>
+            )}
+          </div>
+        </div>
+          );
+        })}
     </div>
   );
 }

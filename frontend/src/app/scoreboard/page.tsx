@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 
-const NEXT_PUBLIC_API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8000";
+// API routes are now proxied through Next.js API routes
 const YEARS = [2020, 2021, 2022, 2024, 2025] as const;
 
 const ZAV_CUTOFFS = {
@@ -156,13 +156,13 @@ type SelectedPlayerData = {
 };
 
 async function fetchScoreboard(year: number): Promise<ScoreboardResponse> {
-  const res = await fetch(`${NEXT_PUBLIC_API_BASE_URL}/scoreboard/${year}`, { cache: "no-store" });
+  const res = await fetch(`/api/scoreboard/${year}`, { cache: "no-store" });
   if (!res.ok) throw new Error(`Failed to fetch scoreboard for ${year}`);
   return res.json();
 }
 
 async function fetchMatchupDetail(year: number, week: number, team1: string, team2: string): Promise<MatchupDetail> {
-  const res = await fetch(`${NEXT_PUBLIC_API_BASE_URL}/matchup/${year}/${week}?team1=${encodeURIComponent(team1)}&team2=${encodeURIComponent(team2)}`, { cache: "no-store" });
+  const res = await fetch(`/api/matchup/${year}/${week}?team1=${encodeURIComponent(team1)}&team2=${encodeURIComponent(team2)}`, { cache: "no-store" });
   if (!res.ok) throw new Error(`Failed to fetch matchup details for ${team1} vs ${team2}`);
   return res.json();
 }
@@ -558,8 +558,8 @@ export default function ScoreboardPage() {
     try {
       // Fetch stats and headshot in parallel
       const [statsResponse, headshotResponse] = await Promise.all([
-        fetch(`${NEXT_PUBLIC_API_BASE_URL}/players/${encodeURIComponent(playerName)}/weekly-stats?year=${year}`),
-        fetch(`${NEXT_PUBLIC_API_BASE_URL}/players/${encodeURIComponent(playerName)}/headshot`)
+        fetch(`/api/players/${encodeURIComponent(playerName)}/weekly-stats?year=${year}`),
+        fetch(`/api/players/${encodeURIComponent(playerName)}/headshot`)
       ]);
       
       if (!statsResponse.ok) {
@@ -577,7 +577,7 @@ export default function ScoreboardPage() {
       const availableYears: number[] = [];
       const yearChecks = YEARS.map(async (checkYear) => {
         try {
-          const checkResponse = await fetch(`${NEXT_PUBLIC_API_BASE_URL}/players/${encodeURIComponent(playerName)}/weekly-stats?year=${checkYear}`);
+          const checkResponse = await fetch(`/api/players/${encodeURIComponent(playerName)}/weekly-stats?year=${checkYear}`);
           if (checkResponse.ok) {
             const checkData: PlayerWeeklyStatsResponse = await checkResponse.json();
             if (hasPlayerData(checkData)) {
@@ -638,7 +638,7 @@ export default function ScoreboardPage() {
     });
 
     try {
-      const response = await fetch(`${NEXT_PUBLIC_API_BASE_URL}/players/${encodeURIComponent(playerData.playerName)}/weekly-stats?year=${newYear}`);
+      const response = await fetch(`/api/players/${encodeURIComponent(playerData.playerName)}/weekly-stats?year=${newYear}`);
       if (!response.ok) {
         throw new Error('Failed to fetch player stats');
       }

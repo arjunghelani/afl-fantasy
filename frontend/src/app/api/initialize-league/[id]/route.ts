@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || process.env.NEXT_PUBLIC_API_BASE || 'http://127.0.0.1:8000';
+const API_BASE_URL = process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || 'http://127.0.0.1:8000';
 
 export async function POST(
   request: NextRequest,
@@ -30,8 +30,15 @@ export async function POST(
       cache: 'no-store',
     });
 
+    if (!response.ok) {
+      return NextResponse.json(
+        { error: `Backend error: ${response.statusText}` },
+        { status: response.status }
+      );
+    }
+
     const data = await response.json();
-    return NextResponse.json(data, { status: response.status });
+    return NextResponse.json(data);
 
   } catch (error) {
     return NextResponse.json(

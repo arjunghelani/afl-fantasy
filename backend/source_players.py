@@ -470,7 +470,7 @@ def get_player_team_mapping(year, player_names):
         max_week = 12  # Hard cap at week 12 for 2025
     else:
         max_week = min(guessed_max_week, 17)
-    weeks = list(range(1, max_week + 1))
+        weeks = list(range(1, max_week + 1))
     
     print(f"  📅 Processing {len(weeks)} weeks (1-{max_week})")
     
@@ -494,9 +494,9 @@ def get_player_team_mapping(year, player_names):
                 
                 for player in home_lineup:
                     player_name = getattr(player, 'name', None)
-                    if player_name:
+            if player_name:
                         # Clean player name (remove asterisks, strip whitespace)
-                        player_name = player_name.replace('*', '').strip()
+                player_name = player_name.replace('*', '').strip()
                         
                         # DEBUG: Print data for Ashton Jeanty
                         if 'Ashton Jeanty' in player_name or player_name == 'Ashton Jeanty':
@@ -531,7 +531,7 @@ def get_player_team_mapping(year, player_names):
                 
                 for player in away_lineup:
                     player_name = getattr(player, 'name', None)
-                    if player_name:
+                if player_name:
                         # Clean player name (remove asterisks, strip whitespace)
                         player_name = player_name.replace('*', '').strip()
                         

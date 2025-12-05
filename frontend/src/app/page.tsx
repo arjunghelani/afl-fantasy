@@ -727,7 +727,7 @@ function LeagueIdModal({
     setSubmitting(true);
     try {
       // Check if data exists
-      const statusRes = await fetch(`/api/api/league-status/${id}`);
+      const statusRes = await fetch(`/api/league-status/${id}`);
       if (!statusRes.ok) throw new Error('Failed to check league status');
       const status = await statusRes.json();
       
@@ -743,7 +743,7 @@ function LeagueIdModal({
         return;
       } else {
         // Start initialization
-        const initRes = await fetch(`/api/api/initialize-league/${id}`, {
+        const initRes = await fetch(`/api/initialize-league/${id}`, {
           method: 'POST'
         });
         if (!initRes.ok) {
@@ -764,7 +764,7 @@ function LeagueIdModal({
     setSubmitting(true);
     try {
       // Initialize with force=true
-      const initRes = await fetch(`/api/api/initialize-league/${pendingLeagueId}?force=true`, {
+      const initRes = await fetch(`/api/initialize-league/${pendingLeagueId}?force=true`, {
         method: 'POST'
       });
       if (!initRes.ok) throw new Error('Failed to start initialization');
@@ -856,7 +856,7 @@ function InitializationStatus({ leagueId, onComplete }: { leagueId: number; onCo
 
     async function checkStatus() {
       try {
-        const res = await fetch(`/api/api/league-status/${leagueId}`);
+        const res = await fetch(`/api/league-status/${leagueId}`);
         if (!res.ok) throw new Error('Failed to check status');
         const data = await res.json();
         
@@ -964,7 +964,7 @@ export default function Home() {
     const storedLeagueId = getLeagueId();
     if (storedLeagueId) {
       // Check if data is ready
-      fetch(`/api/api/league-status/${storedLeagueId}`)
+      fetch(`/api/league-status/${storedLeagueId}`)
         .then(res => res.json())
         .then(status => {
           if (status.status === 'ready') {
@@ -989,7 +989,7 @@ export default function Home() {
     setLeagueId(id); // Store in localStorage
     setShowModal(false);
     // Check if we need to initialize or if data is already ready
-    fetch(`/api/api/league-status/${id}`)
+    fetch(`/api/league-status/${id}`)
       .then(res => res.json())
       .then(status => {
         if (status.status === 'initializing') {

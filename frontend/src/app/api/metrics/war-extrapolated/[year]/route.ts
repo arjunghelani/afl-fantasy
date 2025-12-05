@@ -4,10 +4,10 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL;
 
 export async function GET(
   request: NextRequest,
-  context: { params: { year: string } }
+  context: { params: Promise<{ year: string }> }
 ) {
   try {
-    const { year } = context.params;
+    const { year } = await context.params;
     const searchParams = request.nextUrl.searchParams;
     const url = new URL(`${API_BASE_URL}/metrics/war-extrapolated/${year}`);
     searchParams.forEach((value, key) => {

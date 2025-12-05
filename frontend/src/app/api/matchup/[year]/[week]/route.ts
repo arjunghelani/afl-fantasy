@@ -4,10 +4,10 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL;
 
 export async function GET(
   request: NextRequest,
-  context: { params: { year: string; week: string } }
+  context: { params: Promise<{ year: string; week: string }> }
 ) {
   try {
-    const { year, week } = context.params;
+    const { year, week } = await context.params;
     const searchParams = request.nextUrl.searchParams;
     const url = new URL(`${API_BASE_URL}/matchup/${year}/${week}`);
     searchParams.forEach((value, key) => {

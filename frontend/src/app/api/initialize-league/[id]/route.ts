@@ -4,10 +4,10 @@ const API_BASE_URL = process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_BAS
 
 export async function POST(
   request: NextRequest,
-  context: { params: { id: string } }
+  context: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { id } = context.params;
+    const { id } = await context.params;
 
     const searchParams = request.nextUrl.searchParams;
     const url = new URL(`${API_BASE_URL}/api/initialize-league/${id}`);

@@ -374,7 +374,7 @@ function PlayersPageContent() {
     // Add player to map with loading state
     setSelectedPlayers(prev => {
       const newMap = new Map(prev);
-      newMap.set(playerKey, { playerName, year, selectedYear: year, availableYears: YEARS as number[], position: { x: 0, y: 0 }, loading: true });
+      newMap.set(playerKey, { playerName, year, selectedYear: year, availableYears: [...YEARS], position: { x: 0, y: 0 }, loading: true });
       return newMap;
     });
     

@@ -960,7 +960,7 @@ export default function ScoreboardPage() {
                             game={game}
                             week={week}
                             onClick={() => game && handleGameClick(team, game)}
-                            isTopScoringWeek={isTopScoringWeek}
+                            isTopScoringWeek={!!isTopScoringWeek}
                           />
                         </td>
                       );

@@ -24,7 +24,7 @@ type StandingsResponse = {
 const YEARS = [2020, 2021, 2022, 2024, 2025] as const;
 type YearChoice = (typeof YEARS)[number] | "ALL";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
+const NEXT_PUBLIC_API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8000";
 const LEAGUE_ID_STORAGE_KEY = 'fantasy_league_id';
 
 // exclude these team names (case-insensitive)
@@ -46,7 +46,7 @@ function setLeagueId(leagueId: number): void {
 
 async function fetchStandings(year: number, leagueId?: number | null): Promise<StandingsResponse> {
   const leagueIdParam = leagueId ? `?league_id=${leagueId}` : '';
-  const res = await fetch(`${API_BASE}/standings/${year}${leagueIdParam}`, { cache: "no-store" });
+  const res = await fetch(`${NEXT_PUBLIC_API_BASE_URL}/standings/${year}${leagueIdParam}`, { cache: "no-store" });
   if (!res.ok) throw new Error(`Failed to fetch standings for ${year}`);
   return res.json();
 }
@@ -189,7 +189,7 @@ interface PlayerWeeklyStatsResponse {
 }
 
 async function fetchTeamRosters(year: number): Promise<TeamRosterDetail[]> {
-  const res = await fetch(`${API_BASE}/teams/${year}/rosters`, { cache: "no-store" });
+  const res = await fetch(`${NEXT_PUBLIC_API_BASE_URL}/teams/${year}/rosters`, { cache: "no-store" });
   if (!res.ok) throw new Error(`Failed to fetch team rosters for ${year}`);
   const data: TeamRostersResponse = await res.json();
   return data.teams;
@@ -317,7 +317,7 @@ function getFantasyPointsTextColor(points: number | null): string {
 
 async function fetchTop10ZAV(year: number, leagueId?: number | null): Promise<PlayerVorp[]> {
   const leagueIdParam = leagueId ? `&league_id=${leagueId}` : '';
-  const res = await fetch(`${API_BASE}/metrics/vorp/${year}?top=10${leagueIdParam}`, { cache: "no-store" });
+  const res = await fetch(`${NEXT_PUBLIC_API_BASE_URL}/metrics/vorp/${year}?top=10${leagueIdParam}`, { cache: "no-store" });
   if (!res.ok) throw new Error(`Failed to fetch top 10 ZAV for ${year}`);
   const data: VorpResponse = await res.json();
   return data.players;
@@ -345,7 +345,7 @@ type RecentWaiversResponse = {
 
 async function fetchRecentWaivers(year: number, leagueId?: number | null): Promise<RecentWaiversResponse> {
   const leagueIdParam = leagueId ? `?league_id=${leagueId}` : '';
-  const res = await fetch(`${API_BASE}/recent-waivers/${year}${leagueIdParam}`, { cache: "no-store" });
+  const res = await fetch(`${NEXT_PUBLIC_API_BASE_URL}/recent-waivers/${year}${leagueIdParam}`, { cache: "no-store" });
   if (!res.ok) throw new Error(`Failed to fetch recent waivers for ${year}`);
   return res.json();
 }
@@ -727,7 +727,7 @@ function LeagueIdModal({
     setSubmitting(true);
     try {
       // Check if data exists
-      const statusRes = await fetch(`${API_BASE}/api/league-status/${id}`);
+      const statusRes = await fetch(`${NEXT_PUBLIC_API_BASE_URL}/api/league-status/${id}`);
       if (!statusRes.ok) throw new Error('Failed to check league status');
       const status = await statusRes.json();
       
@@ -743,7 +743,7 @@ function LeagueIdModal({
         return;
       } else {
         // Start initialization
-        const initRes = await fetch(`${API_BASE}/api/initialize-league/${id}`, {
+        const initRes = await fetch(`${NEXT_PUBLIC_API_BASE_URL}/api/initialize-league/${id}`, {
           method: 'POST'
         });
         if (!initRes.ok) {
@@ -764,7 +764,7 @@ function LeagueIdModal({
     setSubmitting(true);
     try {
       // Initialize with force=true
-      const initRes = await fetch(`${API_BASE}/api/initialize-league/${pendingLeagueId}?force=true`, {
+      const initRes = await fetch(`${NEXT_PUBLIC_API_BASE_URL}/api/initialize-league/${pendingLeagueId}?force=true`, {
         method: 'POST'
       });
       if (!initRes.ok) throw new Error('Failed to start initialization');
@@ -856,7 +856,7 @@ function InitializationStatus({ leagueId, onComplete }: { leagueId: number; onCo
 
     async function checkStatus() {
       try {
-        const res = await fetch(`${API_BASE}/api/league-status/${leagueId}`);
+        const res = await fetch(`${NEXT_PUBLIC_API_BASE_URL}/api/league-status/${leagueId}`);
         if (!res.ok) throw new Error('Failed to check status');
         const data = await res.json();
         
@@ -964,7 +964,7 @@ export default function Home() {
     const storedLeagueId = getLeagueId();
     if (storedLeagueId) {
       // Check if data is ready
-      fetch(`${API_BASE}/api/league-status/${storedLeagueId}`)
+      fetch(`${NEXT_PUBLIC_API_BASE_URL}/api/league-status/${storedLeagueId}`)
         .then(res => res.json())
         .then(status => {
           if (status.status === 'ready') {
@@ -989,7 +989,7 @@ export default function Home() {
     setLeagueId(id); // Store in localStorage
     setShowModal(false);
     // Check if we need to initialize or if data is already ready
-    fetch(`${API_BASE}/api/league-status/${id}`)
+    fetch(`${NEXT_PUBLIC_API_BASE_URL}/api/league-status/${id}`)
       .then(res => res.json())
       .then(status => {
         if (status.status === 'initializing') {
@@ -1117,8 +1117,8 @@ export default function Home() {
     try {
       // Fetch stats and headshot in parallel
       const [statsResponse, headshotResponse] = await Promise.all([
-        fetch(`${API_BASE}/players/${encodeURIComponent(playerName)}/weekly-stats?year=${year}`),
-        fetch(`${API_BASE}/players/${encodeURIComponent(playerName)}/headshot`)
+        fetch(`${NEXT_PUBLIC_API_BASE_URL}/players/${encodeURIComponent(playerName)}/weekly-stats?year=${year}`),
+        fetch(`${NEXT_PUBLIC_API_BASE_URL}/players/${encodeURIComponent(playerName)}/headshot`)
       ]);
       
       if (!statsResponse.ok) {
@@ -1137,7 +1137,7 @@ export default function Home() {
       const availableYears: number[] = [];
       const yearChecks = YEARS.map(async (checkYear) => {
         try {
-          const checkResponse = await fetch(`${API_BASE}/players/${encodeURIComponent(playerName)}/weekly-stats?year=${checkYear}`);
+          const checkResponse = await fetch(`${NEXT_PUBLIC_API_BASE_URL}/players/${encodeURIComponent(playerName)}/weekly-stats?year=${checkYear}`);
           if (checkResponse.ok) {
             const checkData: PlayerWeeklyStatsResponse = await checkResponse.json();
             if (hasPlayerData(checkData)) {
@@ -1202,7 +1202,7 @@ export default function Home() {
     });
 
     try {
-      const response = await fetch(`${API_BASE}/players/${encodeURIComponent(playerData.playerName)}/weekly-stats?year=${newYear}`);
+      const response = await fetch(`${NEXT_PUBLIC_API_BASE_URL}/players/${encodeURIComponent(playerData.playerName)}/weekly-stats?year=${newYear}`);
       if (!response.ok) {
         throw new Error('Failed to fetch player stats');
       }

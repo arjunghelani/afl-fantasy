@@ -59,7 +59,7 @@ interface PlayerWeeklyStatsResponse {
 }
 
 const SUPPORTED_YEARS = [2020, 2021, 2022, 2024, 2025];
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8000';
+const NEXT_PUBLIC_API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
 
 // ZAV color scale using RGB - same colors as weekly stats popup
 // Define your ZAV cutoff points here:
@@ -419,8 +419,8 @@ export default function TradesPage() {
     try {
       // Fetch stats and headshot in parallel
       const [statsResponse, headshotResponse] = await Promise.all([
-        fetch(`${API_BASE}/players/${encodeURIComponent(playerName)}/weekly-stats?year=${year}`),
-        fetch(`${API_BASE}/players/${encodeURIComponent(playerName)}/headshot`)
+        fetch(`${NEXT_PUBLIC_API_BASE_URL}/players/${encodeURIComponent(playerName)}/weekly-stats?year=${year}`),
+        fetch(`${NEXT_PUBLIC_API_BASE_URL}/players/${encodeURIComponent(playerName)}/headshot`)
       ]);
       
       if (!statsResponse.ok) {
@@ -439,7 +439,7 @@ export default function TradesPage() {
       const availableYears: number[] = [];
       const yearChecks = SUPPORTED_YEARS.map(async (checkYear) => {
         try {
-          const checkResponse = await fetch(`${API_BASE}/players/${encodeURIComponent(playerName)}/weekly-stats?year=${checkYear}`);
+          const checkResponse = await fetch(`${NEXT_PUBLIC_API_BASE_URL}/players/${encodeURIComponent(playerName)}/weekly-stats?year=${checkYear}`);
           if (checkResponse.ok) {
             const checkData: PlayerWeeklyStatsResponse = await checkResponse.json();
             if (hasPlayerData(checkData)) {
@@ -507,7 +507,7 @@ export default function TradesPage() {
     });
 
     try {
-      const response = await fetch(`${API_BASE}/players/${encodeURIComponent(playerData.playerName)}/weekly-stats?year=${newYear}`);
+      const response = await fetch(`${NEXT_PUBLIC_API_BASE_URL}/players/${encodeURIComponent(playerData.playerName)}/weekly-stats?year=${newYear}`);
       if (!response.ok) {
         throw new Error('Failed to fetch player stats');
       }
@@ -558,7 +558,7 @@ export default function TradesPage() {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
       
-      const response = await fetch(`${API_BASE}/trades/${year}`, {
+      const response = await fetch(`${NEXT_PUBLIC_API_BASE_URL}/trades/${year}`, {
         signal: controller.signal
       });
       
@@ -596,7 +596,7 @@ export default function TradesPage() {
           const controller = new AbortController();
           const timeoutId = setTimeout(() => controller.abort(), 45000); // Longer timeout for team view
           
-          const response = await fetch(`${API_BASE}/trades/${year}`, {
+          const response = await fetch(`${NEXT_PUBLIC_API_BASE_URL}/trades/${year}`, {
             signal: controller.signal
           });
           

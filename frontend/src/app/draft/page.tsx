@@ -95,7 +95,7 @@ interface PlayerWeeklyStatsResponse {
 
 /* ------------------------- config ------------------------- */
 const YEARS = [2020, 2021, 2022, 2024, 2025];
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
+const NEXT_PUBLIC_API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8000";
 const REL_WINDOW = 7;
 const REL_VERSION = 1; // bump when backend logic changes
 const relKeyFor = (year: number) => `${year}|w=${REL_WINDOW}|v=${REL_VERSION}`;
@@ -253,13 +253,13 @@ function fmtSigned(x: number | null | undefined, digits = 1) {
 
 /* ------------------------- data fetchers ------------------------- */
 async function fetchDraft(year: number): Promise<DraftResponse> {
-  const res = await fetch(`${API_BASE}/draft/${year}`, { cache: "no-store" });
+  const res = await fetch(`${NEXT_PUBLIC_API_BASE_URL}/draft/${year}`, { cache: "no-store" });
   if (!res.ok) throw new Error(`Failed to fetch draft for ${year}`);
   return res.json();
 }
 
 async function fetchVorpMap(year: number): Promise<VorpMap> {
-  const res = await fetch(`${API_BASE}/metrics/vorp/${year}?top=2000`, { cache: "no-store" });
+  const res = await fetch(`${NEXT_PUBLIC_API_BASE_URL}/metrics/vorp/${year}?top=2000`, { cache: "no-store" });
   if (!res.ok) {
     const txt = await res.text().catch(() => "");
     throw new Error(`VORP* ${year} failed: ${res.status} ${res.statusText} ${txt}`);
@@ -281,7 +281,7 @@ async function fetchVorpMap(year: number): Promise<VorpMap> {
 
 /* ---- relative (smoothed) payload ---- */
 async function fetchVorpRelative(year: number, window = 7): Promise<VorpRelativeResponse> {
-  const res = await fetch(`${API_BASE}/metrics/vorp_relative/${year}?window=${window}`, { cache: "no-store" });
+  const res = await fetch(`${NEXT_PUBLIC_API_BASE_URL}/metrics/vorp_relative/${year}?window=${window}`, { cache: "no-store" });
   if (!res.ok) {
     const txt = await res.text().catch(() => "");
     throw new Error(`VORP relative ${year} failed: ${res.status} ${res.statusText} ${txt}`);
@@ -432,8 +432,8 @@ export default function DraftsPage() {
       // encodeURIComponent handles special characters like "/" in "D/ST"
       const encodedName = encodeURIComponent(playerName);
       const [statsResponse, headshotResponse] = await Promise.all([
-        fetch(`${API_BASE}/players/${encodedName}/weekly-stats?year=${year}`),
-        fetch(`${API_BASE}/players/${encodedName}/headshot`)
+        fetch(`${NEXT_PUBLIC_API_BASE_URL}/players/${encodedName}/weekly-stats?year=${year}`),
+        fetch(`${NEXT_PUBLIC_API_BASE_URL}/players/${encodedName}/headshot`)
       ]);
       
       if (!statsResponse.ok) {
@@ -454,7 +454,7 @@ export default function DraftsPage() {
       const availableYears: number[] = [];
       const yearChecks = YEARS.map(async (checkYear) => {
         try {
-          const checkResponse = await fetch(`${API_BASE}/players/${encodedName}/weekly-stats?year=${checkYear}`);
+          const checkResponse = await fetch(`${NEXT_PUBLIC_API_BASE_URL}/players/${encodedName}/weekly-stats?year=${checkYear}`);
           if (checkResponse.ok) {
             const checkData: PlayerWeeklyStatsResponse = await checkResponse.json();
             if (hasPlayerData(checkData)) {
@@ -521,7 +521,7 @@ export default function DraftsPage() {
     });
 
     try {
-      const response = await fetch(`${API_BASE}/players/${encodeURIComponent(playerData.playerName)}/weekly-stats?year=${newYear}`);
+      const response = await fetch(`${NEXT_PUBLIC_API_BASE_URL}/players/${encodeURIComponent(playerData.playerName)}/weekly-stats?year=${newYear}`);
       if (!response.ok) {
         throw new Error('Failed to fetch player stats');
       }

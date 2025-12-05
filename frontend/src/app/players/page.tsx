@@ -90,7 +90,7 @@ interface PlayerWeeklyStatsResponse {
 /* -------------------------- config -------------------------- */
 const YEARS = [2020, 2021, 2022, 2024, 2025] as const;
 type YearChoice = (typeof YEARS)[number] | "ALL";
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
+const NEXT_PUBLIC_API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8000";
 
 // Map team_id → display name (fill in with your own labels)
 const TEAM_NAME_MAP: Record<number, string> = {
@@ -230,7 +230,7 @@ function getFantasyPointsTextColor(points: number | null): string {
 
 /* ------------------------ data fetchers ---------------------- */
 // async function fetchVorp(year: number): Promise<VorpResponse> {
-//   const res = await fetch(`${API_BASE}/metrics/vorp/${year}?top=500`, { cache: "no-store" });
+//   const res = await fetch(`${NEXT_PUBLIC_API_BASE_URL}/metrics/vorp/${year}?top=500`, { cache: "no-store" });
 //   if (!res.ok) {
 //     const body = await res.text().catch(() => "");
 //     throw new Error(`VORP ${year} failed: ${res.status} ${res.statusText} ${body}`);
@@ -239,7 +239,7 @@ function getFantasyPointsTextColor(points: number | null): string {
 // }
 
 async function fetchDraft(year: number): Promise<DraftResponse> {
-  const res = await fetch(`${API_BASE}/draft/${year}`, { cache: "no-store" });
+  const res = await fetch(`${NEXT_PUBLIC_API_BASE_URL}/draft/${year}`, { cache: "no-store" });
   if (!res.ok) {
     const body = await res.text().catch(() => "");
     throw new Error(`Draft ${year} failed: ${res.status} ${res.statusText} ${body}`);
@@ -276,7 +276,7 @@ async function fetchExtrapolated(year: number, positionFilter?: Set<string>): Pr
     // Add position filter to API call if not all positions
     ...(positionFilter && positionFilter.size < 4 ? { pos: Array.from(positionFilter).join(",") } : {}),
   });
-  const res = await fetch(`${API_BASE}/metrics/war-extrapolated/${year}?${params.toString()}`, {
+  const res = await fetch(`${NEXT_PUBLIC_API_BASE_URL}/metrics/war-extrapolated/${year}?${params.toString()}`, {
     cache: "no-store",
   });
   if (!res.ok) {
@@ -290,7 +290,7 @@ async function fetchVorp(year: number, positionFilter?: Set<string>): Promise<Vo
   // Calculate optimal limit for regular VORP too
   const limit = calculateOptimalLimit(positionFilter, 1); // 1 year
   
-  const res = await fetch(`${API_BASE}/metrics/vorp/${year}?top=${limit}`, { cache: "no-store" });
+  const res = await fetch(`${NEXT_PUBLIC_API_BASE_URL}/metrics/vorp/${year}?top=${limit}`, { cache: "no-store" });
   if (!res.ok) {
     const body = await res.text().catch(() => "");
     throw new Error(`VORP ${year} failed: ${res.status} ${res.statusText} ${body}`);
@@ -381,8 +381,8 @@ function PlayersPageContent() {
     try {
       // Fetch stats and headshot in parallel
       const [statsResponse, headshotResponse] = await Promise.all([
-        fetch(`${API_BASE}/players/${encodeURIComponent(playerName)}/weekly-stats?year=${year}`),
-        fetch(`${API_BASE}/players/${encodeURIComponent(playerName)}/headshot`)
+        fetch(`${NEXT_PUBLIC_API_BASE_URL}/players/${encodeURIComponent(playerName)}/weekly-stats?year=${year}`),
+        fetch(`${NEXT_PUBLIC_API_BASE_URL}/players/${encodeURIComponent(playerName)}/headshot`)
       ]);
       
       if (!statsResponse.ok) {
@@ -434,7 +434,7 @@ function PlayersPageContent() {
     });
     
     try {
-      const response = await fetch(`${API_BASE}/players/${encodeURIComponent(playerData.playerName)}/weekly-stats?year=${newYear}`);
+      const response = await fetch(`${NEXT_PUBLIC_API_BASE_URL}/players/${encodeURIComponent(playerData.playerName)}/weekly-stats?year=${newYear}`);
       if (!response.ok) {
         throw new Error('Failed to fetch player stats');
       }

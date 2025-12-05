@@ -37,7 +37,7 @@ interface PlayerWeeklyStatsResponse {
 }
 
 const SUPPORTED_YEARS = [2020, 2021, 2022, 2024, 2025];
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8000';
+const NEXT_PUBLIC_API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
 
 // ZAV color scale - same as other pages
 const ZAV_CUTOFFS = {
@@ -236,7 +236,7 @@ export default function WaiversPage() {
       setError(null);
       
       try {
-        const response = await fetch(`${API_BASE}/waivers/${year}`, { cache: 'no-store' });
+        const response = await fetch(`${NEXT_PUBLIC_API_BASE_URL}/waivers/${year}`, { cache: 'no-store' });
         if (!response.ok) {
           throw new Error('Failed to fetch waiver activity');
         }
@@ -283,8 +283,8 @@ export default function WaiversPage() {
     try {
       // Fetch stats and headshot in parallel
       const [statsResponse, headshotResponse] = await Promise.all([
-        fetch(`${API_BASE}/players/${encodeURIComponent(playerName)}/weekly-stats?year=${year}`),
-        fetch(`${API_BASE}/players/${encodeURIComponent(playerName)}/headshot`)
+        fetch(`${NEXT_PUBLIC_API_BASE_URL}/players/${encodeURIComponent(playerName)}/weekly-stats?year=${year}`),
+        fetch(`${NEXT_PUBLIC_API_BASE_URL}/players/${encodeURIComponent(playerName)}/headshot`)
       ]);
       
       if (!statsResponse.ok) {
@@ -302,7 +302,7 @@ export default function WaiversPage() {
       const availableYears: number[] = [];
       const yearChecks = SUPPORTED_YEARS.map(async (checkYear) => {
         try {
-          const checkResponse = await fetch(`${API_BASE}/players/${encodeURIComponent(playerName)}/weekly-stats?year=${checkYear}`);
+          const checkResponse = await fetch(`${NEXT_PUBLIC_API_BASE_URL}/players/${encodeURIComponent(playerName)}/weekly-stats?year=${checkYear}`);
           if (checkResponse.ok) {
             const checkData: PlayerWeeklyStatsResponse = await checkResponse.json();
             if (hasPlayerData(checkData)) {
@@ -363,7 +363,7 @@ export default function WaiversPage() {
     });
     
     try {
-      const response = await fetch(`${API_BASE}/players/${encodeURIComponent(existing.playerName)}/weekly-stats?year=${newYear}`);
+      const response = await fetch(`${NEXT_PUBLIC_API_BASE_URL}/players/${encodeURIComponent(existing.playerName)}/weekly-stats?year=${newYear}`);
       if (!response.ok) {
         throw new Error('Failed to fetch player stats');
       }

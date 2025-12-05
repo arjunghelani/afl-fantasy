@@ -4,10 +4,10 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || process.env.NEXT_PUBLIC_
 
 export async function GET(
   request: NextRequest,
-  context: { params: Promise<{ year: string }> }
+  context: { params: { year: string } }
 ) {
   try {
-    const { year } = await context.params;
+    const { year } = context.params;
     const searchParams = request.nextUrl.searchParams;
     const url = new URL(`${API_BASE_URL}/metrics/vorp/${year}`);
     searchParams.forEach((value, key) => {

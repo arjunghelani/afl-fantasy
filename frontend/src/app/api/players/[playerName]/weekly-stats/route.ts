@@ -4,10 +4,10 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || process.env.NEXT_PUBLIC_
 
 export async function GET(
   request: NextRequest,
-  context: { params: Promise<{ playerName: string }> }
+  context: { params: { playerName: string } }
 ) {
   try {
-    const { playerName } = await context.params;
+    const { playerName } = context.params;
     const searchParams = request.nextUrl.searchParams;
     const url = new URL(`${API_BASE_URL}/players/${encodeURIComponent(playerName)}/weekly-stats`);
     searchParams.forEach((value, key) => {

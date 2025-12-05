@@ -800,7 +800,15 @@ function PlayersPageContent() {
 
   return (
     <main className="min-h-screen bg-slate-950 text-white">
-      <div className="max-w-none mx-0 pr-8 pt-8 pb-8 pl-5 space-y-8">
+      <div className="max-w-none mx-0 pr-8 pt-8 pb-8 pl-5 space-y-8 relative">
+      {/* Select League Button - Top Left */}
+      <button
+        onClick={() => window.location.href = '/'}
+        className="absolute top-0 left-0 px-3 py-1.5 rounded-md bg-gradient-to-r from-purple-600 to-purple-800 text-white text-xs font-medium hover:from-purple-700 hover:to-purple-900 active:from-purple-800 active:to-purple-950 transition-all duration-150 shadow-sm hover:shadow active:shadow-none active:scale-[0.98] z-10"
+      >
+        Select League
+      </button>
+      
       {/* Header */}
       <div className="text-center mb-12">
         <h1 className="text-5xl font-bold text-white mb-4">

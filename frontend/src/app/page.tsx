@@ -26,6 +26,7 @@ type YearChoice = (typeof YEARS)[number] | "ALL";
 
 // API routes are now proxied through Next.js API routes
 const LEAGUE_ID_STORAGE_KEY = 'fantasy_league_id';
+const DEFAULT_LEAGUE_ID = 86952922;
 
 // exclude these team names (case-insensitive)
 const EXCLUDED_TEAM_NAMES = new Set(["team ned"]);
@@ -39,7 +40,7 @@ function getLeagueId(): number | null {
   return stored ? parseInt(stored, 10) : null;
 }
 
-function setLeagueId(leagueId: number): void {
+function saveLeagueIdToStorage(leagueId: number): void {
   if (typeof window === 'undefined') return;
   localStorage.setItem(LEAGUE_ID_STORAGE_KEY, leagueId.toString());
 }
@@ -940,8 +941,8 @@ function InitializationStatus({ leagueId, onComplete }: { leagueId: number; onCo
 }
 
 export default function Home() {
-  const [leagueId, setLeagueId] = useState<number | null>(null);
-  const [showModal, setShowModal] = useState<boolean>(false);
+  const [leagueId, setLeagueId] = useState<number | null>(DEFAULT_LEAGUE_ID);
+  const [showSwitchLeagueModal, setShowSwitchLeagueModal] = useState<boolean>(false);
   const [initializing, setInitializing] = useState<boolean>(false);
   const [selectedYear, setSelectedYear] = useState<number | 'ALL'>(2025);
   const [data, setData] = useState<StandingsResponse | null>(null);
@@ -959,35 +960,51 @@ export default function Home() {
   const [expandedTeams, setExpandedTeams] = useState<Set<number>>(new Set());
   const [selectedPlayers, setSelectedPlayers] = useState<Map<string, {playerName: string, year: number, selectedYear: number, availableYears: number[], position?: {x: number, y: number}, stats?: PlayerWeeklyStatsResponse, loading?: boolean, headshotUrl?: string | null}>>(new Map());
 
-  // Check for league ID on mount
+  // Check for league ID on mount - use default or stored
   useEffect(() => {
     const storedLeagueId = getLeagueId();
-    if (storedLeagueId) {
-      // Check if data is ready
-      fetch(`/api/league-status/${storedLeagueId}`)
-        .then(res => res.json())
-        .then(status => {
-          if (status.status === 'ready') {
-            setLeagueId(storedLeagueId);
-          } else if (status.status === 'initializing') {
-            setLeagueId(storedLeagueId);
-            setInitializing(true);
-          } else {
-            setShowModal(true);
-          }
-        })
-        .catch(() => {
-          setShowModal(true);
+    const activeLeagueId = storedLeagueId || DEFAULT_LEAGUE_ID;
+    
+    // Set the league ID and store in localStorage
+    setLeagueId(activeLeagueId);
+    saveLeagueIdToStorage(activeLeagueId);
+    
+    // Check if data is ready
+    fetch(`/api/league-status/${activeLeagueId}`)
+      .then(res => res.json())
+      .then(status => {
+        if (status.status === 'ready') {
+          // Data is ready, just show dashboard
+          setInitializing(false);
+        } else if (status.status === 'initializing') {
+          // Data is being initialized
+          setInitializing(true);
+        } else {
+          // No data, start initialization
+          setInitializing(true);
+          fetch(`/api/initialize-league/${activeLeagueId}`, {
+            method: 'POST'
+          }).catch(() => {
+            // If initialization fails, still show dashboard (might be network issue)
+            setInitializing(false);
+          });
+        }
+      })
+      .catch(() => {
+        // If check fails, assume we need to initialize
+        setInitializing(true);
+        fetch(`/api/initialize-league/${activeLeagueId}`, {
+          method: 'POST'
+        }).catch(() => {
+          setInitializing(false);
         });
-    } else {
-      setShowModal(true);
-    }
+      });
   }, []);
 
-  const handleLeagueIdSubmit = (id: number) => {
+  const handleSwitchLeague = (id: number) => {
     setLeagueId(id);
-    setLeagueId(id); // Store in localStorage
-    setShowModal(false);
+    saveLeagueIdToStorage(id);
+    setShowSwitchLeagueModal(false);
     // Check if we need to initialize or if data is already ready
     fetch(`/api/league-status/${id}`)
       .then(res => res.json())
@@ -998,13 +1015,23 @@ export default function Home() {
           // Data is ready, just show dashboard
           setInitializing(false);
         } else {
-          // Shouldn't happen, but set initializing just in case
+          // Start initialization
           setInitializing(true);
+          fetch(`/api/initialize-league/${id}`, {
+            method: 'POST'
+          }).catch(() => {
+            setInitializing(false);
+          });
         }
       })
       .catch(() => {
         // If check fails, assume we need to initialize
         setInitializing(true);
+        fetch(`/api/initialize-league/${id}`, {
+          method: 'POST'
+        }).catch(() => {
+          setInitializing(false);
+        });
       });
   };
 
@@ -1371,11 +1398,12 @@ export default function Home() {
     return sorted;
   };
 
-  // Show modal if no league ID
-  if (showModal) {
+  // Show switch league modal if requested
+  if (showSwitchLeagueModal) {
     return (
       <LeagueIdModal 
-        onSubmit={handleLeagueIdSubmit}
+        onSubmit={handleSwitchLeague}
+        onCancel={() => setShowSwitchLeagueModal(false)}
       />
     );
   }
@@ -1400,7 +1428,15 @@ export default function Home() {
       <div className="max-w-none mx-0 pr-8 pt-8 pb-8 pl-5">
 
         {/* Header Navigation */}
-        <header className="mb-12">
+        <header className="mb-12 relative">
+          {/* Select League Button - Top Left */}
+          <button
+            onClick={() => setShowSwitchLeagueModal(true)}
+            className="absolute top-0 left-0 px-3 py-1.5 rounded-md bg-gradient-to-r from-purple-600 to-purple-800 text-white text-xs font-medium hover:from-purple-700 hover:to-purple-900 active:from-purple-800 active:to-purple-950 transition-all duration-150 shadow-sm hover:shadow active:shadow-none active:scale-[0.98]"
+          >
+            Select League
+          </button>
+          
           <nav className="flex justify-center items-center gap-3 flex-wrap">
             <Link 
               href="/" 

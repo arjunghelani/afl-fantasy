@@ -837,8 +837,15 @@ export default function ScoreboardPage() {
   const maxWeek = getMaxWeek();
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900 relative">
       <div className="max-w-7xl mx-auto px-4 py-8">
+        {/* Select League Button - Top Left */}
+        <button
+          onClick={() => window.location.href = '/'}
+          className="absolute top-0 left-0 px-3 py-1.5 rounded-md bg-gradient-to-r from-purple-600 to-purple-800 text-white text-xs font-medium hover:from-purple-700 hover:to-purple-900 active:from-purple-800 active:to-purple-950 transition-all duration-150 shadow-sm hover:shadow active:shadow-none active:scale-[0.98] z-10 m-6"
+        >
+          Select League
+        </button>
         {/* Header */}
         <div className="text-center mb-8">
           <h1 className="text-4xl font-bold text-gray-900 dark:text-white mb-2 bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent">

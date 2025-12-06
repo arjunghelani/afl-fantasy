@@ -463,7 +463,7 @@ function RecentWaiversBox({ onPlayerClick, leagueId }: { onPlayerClick?: (player
                                     {player.player_name}
                                   </div>
                                   <div className="text-xs text-slate-400">
-                                    {transaction.team_name}
+                                    {transaction.team_name?.replace(/RAWDOGS/gi, 'DOGS') || transaction.team_name}
                                   </div>
                                 </div>
                               ))
@@ -492,7 +492,7 @@ function RecentWaiversBox({ onPlayerClick, leagueId }: { onPlayerClick?: (player
                                     {player.player_name}
                                   </div>
                                   <div className="text-xs text-slate-400">
-                                    {transaction.team_name}
+                                    {transaction.team_name?.replace(/RAWDOGS/gi, 'DOGS') || transaction.team_name}
                                   </div>
                                 </div>
                               ))
@@ -1429,14 +1429,6 @@ export default function Home() {
 
         {/* Header Navigation */}
         <header className="mb-12 relative">
-          {/* Select League Button - Top Left */}
-          <button
-            onClick={() => setShowSwitchLeagueModal(true)}
-            className="absolute top-0 left-0 px-3 py-1.5 rounded-md bg-gradient-to-r from-purple-600 to-purple-800 text-white text-xs font-medium hover:from-purple-700 hover:to-purple-900 active:from-purple-800 active:to-purple-950 transition-all duration-150 shadow-sm hover:shadow active:shadow-none active:scale-[0.98]"
-          >
-            Select League
-          </button>
-          
           <nav className="flex justify-center items-center gap-3 flex-wrap">
             <Link 
               href="/" 
@@ -1623,11 +1615,11 @@ export default function Home() {
                                     onClick={() => toggleTeam(team.team_id)}
                                     className="font-semibold text-slate-100 text-base group-hover:text-indigo-400 transition-colors cursor-pointer text-left"
                                   >
-                                    {team.team_name}
+                                    {team.team_name?.replace(/RAWDOGS/gi, 'DOGS') || team.team_name}
                                   </button>
                                 ) : (
                                   <div className="font-semibold text-slate-100 text-base">
-                                    {team.team_name}
+                                    {team.team_name?.replace(/RAWDOGS/gi, 'DOGS') || team.team_name}
                                   </div>
                                 )}
                               </td>

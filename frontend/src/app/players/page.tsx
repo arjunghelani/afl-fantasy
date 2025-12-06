@@ -332,7 +332,7 @@ function PlayersPageContent() {
   const [selectedPlayers, setSelectedPlayers] = useState<Map<string, {playerName: string, year: number, selectedYear: number, availableYears: number[], position?: {x: number, y: number}, stats?: PlayerWeeklyStatsResponse, loading?: boolean, headshotUrl?: string | null}>>(new Map());
 
   // Sorting state
-  type SortColumn = 'player_name' | 'fantasy_pos' | 'drafter' | 'round' | 'fantasy_points_ppr' | 'ppr_per_game' | 'vorp_star' | 'true_vorp_star' | 'adj_vorp_star' | 'delta_vorp_star_mean' | 'weeks_played' | 'missed_weeks' | 'year';
+  type SortColumn = 'player_name' | 'fantasy_pos' | 'round' | 'fantasy_points_ppr' | 'ppr_per_game' | 'vorp_star' | 'true_vorp_star' | 'adj_vorp_star' | 'delta_vorp_star_mean' | 'weeks_played' | 'missed_weeks' | 'year';
   type SortDirection = 'asc' | 'desc';
   const [sortColumn, setSortColumn] = useState<SortColumn>('vorp_star');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
@@ -645,19 +645,6 @@ function PlayersPageContent() {
             return (bValue as string).localeCompare(aValue as string);
           }
         
-        case 'drafter': {
-          const yA = a.year ?? 0;
-          const yB = b.year ?? 0;
-          const dA = yA ? draftIndex[`${yA}|${normalizeName(a.player_name)}`] : undefined;
-          const dB = yB ? draftIndex[`${yB}|${normalizeName(b.player_name)}`] : undefined;
-          aValue = dA?.drafter ?? '—';
-          bValue = dB?.drafter ?? '—';
-          if (sortDirection === 'asc') {
-            return (aValue as string).localeCompare(bValue as string);
-          } else {
-            return (bValue as string).localeCompare(aValue as string);
-          }
-        }
         
         case 'round': {
           const yA = a.year ?? 0;
@@ -801,14 +788,6 @@ function PlayersPageContent() {
   return (
     <main className="min-h-screen bg-slate-950 text-white">
       <div className="max-w-none mx-0 pr-8 pt-8 pb-8 pl-5 space-y-8 relative">
-      {/* Select League Button - Top Left */}
-      <button
-        onClick={() => window.location.href = '/'}
-        className="absolute top-0 left-0 px-3 py-1.5 rounded-md bg-gradient-to-r from-purple-600 to-purple-800 text-white text-xs font-medium hover:from-purple-700 hover:to-purple-900 active:from-purple-800 active:to-purple-950 transition-all duration-150 shadow-sm hover:shadow active:shadow-none active:scale-[0.98] z-10"
-      >
-        Select League
-      </button>
-      
       {/* Header */}
       <div className="text-center mb-12">
         <h1 className="text-5xl font-bold text-white mb-4">
@@ -999,19 +978,6 @@ function PlayersPageContent() {
                   </div>
                 </th>
                 <th 
-                  className="text-left px-6 py-4 text-sm font-semibold text-white uppercase tracking-wider cursor-pointer hover:bg-slate-700/50 transition-colors"
-                  onClick={() => handleSort('drafter')}
-                >
-                  <div className="flex items-center gap-2">
-                    Drafted By
-                    {sortColumn === 'drafter' && (
-                      <span className="text-xs">
-                        {sortDirection === 'asc' ? '↑' : '↓'}
-                      </span>
-                    )}
-                  </div>
-                </th>
-                <th 
                   className="text-right px-6 py-4 text-sm font-semibold text-white uppercase tracking-wider cursor-pointer hover:bg-slate-700/50 transition-colors"
                   onClick={() => handleSort('round')}
                 >
@@ -1195,7 +1161,6 @@ function PlayersPageContent() {
                       </div>
                     </td>
                     <td className="px-6 py-5 text-slate-300">{r.fantasy_pos}</td>
-                    <td className="px-6 py-5 text-slate-300">{d?.drafter ?? "—"}</td>
                     <td className="px-6 py-5 text-right text-slate-300">{d?.round ?? "—"}</td>
 
                     {!extrapolate && (

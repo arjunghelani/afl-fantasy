@@ -443,13 +443,6 @@ export default function WaiversPage() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-blue-50 dark:from-gray-950 dark:to-blue-950 relative">
       <div className="mx-auto p-6">
-        {/* Select League Button - Top Left */}
-        <button
-          onClick={() => window.location.href = '/'}
-          className="absolute top-0 left-0 px-3 py-1.5 rounded-md bg-gradient-to-r from-purple-600 to-purple-800 text-white text-xs font-medium hover:from-purple-700 hover:to-purple-900 active:from-purple-800 active:to-purple-950 transition-all duration-150 shadow-sm hover:shadow active:shadow-none active:scale-[0.98] z-10 m-6"
-        >
-          Select League
-        </button>
         {/* Header */}
         <div className="text-center mb-8">
           <h1 className="text-4xl font-bold text-gray-900 dark:text-white mb-2 bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent">
@@ -656,7 +649,7 @@ export default function WaiversPage() {
                     {/* Header with team and date */}
                     <div className="flex items-center justify-between mb-4 pb-3 border-b border-gray-300 dark:border-gray-600">
                       <div className="text-gray-900 dark:text-white font-semibold text-base tracking-tight">
-                        {firstTrans.team_name || 'Unknown Team'}
+                        {(firstTrans.team_name || 'Unknown Team').replace(/RAWDOGS/gi, 'DOGS')}
                       </div>
                       <div className="text-gray-500 dark:text-gray-400 text-sm font-medium">
                         {formatDate(firstTrans.transaction_date)}

@@ -300,7 +300,7 @@ export default function DraftsPage() {
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [view, setView] = useState<"board" | "list">("board");
+  const [view] = useState<"board">("board");
 
   // Color modes
   const [colorMode, setColorMode] = useState<ColorMode>("position");
@@ -582,13 +582,6 @@ export default function DraftsPage() {
   return (
     <div className="min-h-screen bg-slate-950 text-white relative">
       <div className="max-w-[1600px] mx-auto px-3 py-6 sm:px-6">
-        {/* Select League Button - Top Left */}
-        <button
-          onClick={() => window.location.href = '/'}
-          className="absolute top-0 left-0 px-3 py-1.5 rounded-md bg-gradient-to-r from-purple-600 to-purple-800 text-white text-xs font-medium hover:from-purple-700 hover:to-purple-900 active:from-purple-800 active:to-purple-950 transition-all duration-150 shadow-sm hover:shadow active:shadow-none active:scale-[0.98] z-10 m-6"
-        >
-          Select League
-        </button>
         {/* Header */}
         <div className="text-center mb-7">
           <h1 className="text-4xl font-bold text-gray-900 dark:text-white mb-2 bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent tracking-tight">
@@ -641,30 +634,6 @@ export default function DraftsPage() {
             <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Draft Controls</h2>
             
             <div className="flex flex-wrap items-center gap-3">
-              {/* View toggle */}
-              <div className="inline-flex rounded-full overflow-hidden border border-gray-200 dark:border-gray-700">
-                <button
-                  className={`px-3 py-2 text-sm font-medium transition-colors ${
-                    view === "board" 
-                      ? "bg-white text-black" 
-                      : "bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600"
-                  }`}
-                  onClick={() => setView("board")}
-                >
-                  Board
-                </button>
-                <button
-                  className={`px-3 py-2 text-sm font-medium transition-colors ${
-                    view === "list" 
-                      ? "bg-white text-black" 
-                      : "bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600"
-                  }`}
-                  onClick={() => setView("list")}
-                >
-                  List
-                </button>
-              </div>
-
               {/* Color-by toggle */}
               <div className="inline-flex rounded-full overflow-hidden border border-gray-200 dark:border-gray-700">
                 <button
@@ -742,7 +711,6 @@ export default function DraftsPage() {
 
         {!loading && !error && data && (
           <div className="rounded-2xl border border-gray-200/70 dark:border-white/10 bg-white/95 dark:bg-gray-900/85 shadow-2xl overflow-hidden backdrop-blur">
-          {view === "board" ? (
             <DraftBoard
               rounds={draftRounds}
               colorMode={colorMode}
@@ -751,9 +719,6 @@ export default function DraftsPage() {
               onPlayerClick={handlePlayerClick}
               year={year}
             />
-          ) : (
-            <DraftList picks={data.picks} onPlayerClick={handlePlayerClick} year={year} />
-          )}
           </div>
         )}
 
@@ -994,11 +959,24 @@ function DraftBoard({
     return row?.residual ?? undefined;
   }
 
+  // Helper function to replace RAWDOGS with DOGS
+  const cleanTeamName = (name: string): string => {
+    return name.replace(/RAWDOGS/gi, 'DOGS');
+  };
+
+  // Helper function to get team display name (Team 1, Team 2, etc.)
+  const getTeamDisplayName = (pickNum: number | null, teamCount: number): string => {
+    if (pickNum && pickNum > 0 && pickNum <= teamCount) {
+      return `Team ${pickNum}`;
+    }
+    return 'Team';
+  };
+
   const round1 = rounds.find(([r]) => r === 1)?.[1] ?? [];
   const round1Sorted = [...round1].sort((a, b) => (a.pick_num ?? 999) - (b.pick_num ?? 999));
-  const headerTeams = round1Sorted.map((p) => p.team_name);
   const maxPickSeen = Math.max(0, ...rounds.flatMap(([, ps]) => ps.map((p) => p.pick_num ?? 0)));
-  const teamCount = Math.max(headerTeams.length, maxPickSeen, 12);
+  const teamCount = Math.max(round1Sorted.length, maxPickSeen, 12);
+  const headerTeams = round1Sorted.map((p) => getTeamDisplayName(p.pick_num, teamCount));
   const gridTemplate = `${GUTTER}px repeat(${teamCount}, minmax(${COL_MIN}px, 1fr))`;
 
   return (
@@ -1200,6 +1178,11 @@ function DraftBoard({
 
 
 function DraftList({ picks, onPlayerClick, year }: { picks: DraftPick[]; onPlayerClick?: (playerName: string, year: number, event?: React.MouseEvent<HTMLDivElement>) => void; year: number }) {
+  // Helper function to replace RAWDOGS with DOGS
+  const cleanTeamName = (name: string): string => {
+    return name.replace(/RAWDOGS/gi, 'DOGS');
+  };
+
   return (
     <div className="rounded-2xl shadow-xl shadow-slate-950/50 border border-slate-800 bg-slate-900 overflow-hidden">
       <table className="w-full text-sm">
@@ -1232,7 +1215,7 @@ function DraftList({ picks, onPlayerClick, year }: { picks: DraftPick[]; onPlaye
               </td>
               <td className="py-2 px-3 text-slate-200">{p.position ?? "—"}</td>
               <td className="py-2 px-3 text-slate-200">{p.pro_team ?? "—"}</td>
-              <td className="py-2 px-3 text-slate-200">{p.team_name}</td>
+              <td className="py-2 px-3 text-slate-200">{cleanTeamName(p.team_name)}</td>
               <td className="py-2 px-3 text-slate-200">{p.owner ?? "—"}</td>
               <td className="py-2 px-3 text-slate-200">{p.is_keeper ? "Yes" : "No"}</td>
             </tr>

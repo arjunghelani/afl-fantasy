@@ -399,7 +399,7 @@ function GameDetailModal({
                   ? 'text-emerald-800 dark:text-emerald-200' 
                   : 'text-gray-900 dark:text-white'
               }`}>
-                {matchup.home_team.team_name}
+                {matchup.home_team.team_name?.replace(/RAWDOGS/gi, 'DOGS') || matchup.home_team.team_name}
               </h4>
               <div className={`text-3xl font-bold ${
                 matchup.home_team.total_score > matchup.away_team.total_score 
@@ -419,7 +419,7 @@ function GameDetailModal({
                   ? 'text-emerald-800 dark:text-emerald-200' 
                   : 'text-gray-900 dark:text-white'
               }`}>
-                {matchup.away_team.team_name}
+                {matchup.away_team.team_name?.replace(/RAWDOGS/gi, 'DOGS') || matchup.away_team.team_name}
               </h4>
               <div className={`text-3xl font-bold ${
                 matchup.away_team.total_score > matchup.home_team.total_score 
@@ -437,7 +437,7 @@ function GameDetailModal({
               <thead>
                 <tr className="bg-gradient-to-r from-slate-800 to-slate-700">
                   <th className="text-left py-3 px-4 text-sm font-semibold text-white uppercase tracking-wider">
-                    {matchup.home_team.team_name}
+                    {matchup.home_team.team_name?.replace(/RAWDOGS/gi, 'DOGS') || matchup.home_team.team_name}
                   </th>
                   <th className="text-center py-3 px-4 text-sm font-semibold text-white uppercase tracking-wider">
                     Points
@@ -449,7 +449,7 @@ function GameDetailModal({
                     Points
                   </th>
                   <th className="text-right py-3 px-4 text-sm font-semibold text-white uppercase tracking-wider">
-                    {matchup.away_team.team_name}
+                    {matchup.away_team.team_name?.replace(/RAWDOGS/gi, 'DOGS') || matchup.away_team.team_name}
                   </th>
                 </tr>
               </thead>
@@ -839,13 +839,6 @@ export default function ScoreboardPage() {
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 relative">
       <div className="max-w-7xl mx-auto px-4 py-8">
-        {/* Select League Button - Top Left */}
-        <button
-          onClick={() => window.location.href = '/'}
-          className="absolute top-0 left-0 px-3 py-1.5 rounded-md bg-gradient-to-r from-purple-600 to-purple-800 text-white text-xs font-medium hover:from-purple-700 hover:to-purple-900 active:from-purple-800 active:to-purple-950 transition-all duration-150 shadow-sm hover:shadow active:shadow-none active:scale-[0.98] z-10 m-6"
-        >
-          Select League
-        </button>
         {/* Header */}
         <div className="text-center mb-8">
           <h1 className="text-4xl font-bold text-gray-900 dark:text-white mb-2 bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent">
@@ -941,7 +934,7 @@ export default function ScoreboardPage() {
                             filter: 'drop-shadow(0 0 24px #fbbf24)'
                           } : {}}
                         >
-                          {team.team_name}
+                          {team.team_name?.replace(/RAWDOGS/gi, 'DOGS') || team.team_name}
                         </span>
                       </div>
                     </td>

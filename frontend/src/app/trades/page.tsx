@@ -220,7 +220,7 @@ const MiniTradeCard = ({ trade, year, showYear = false, onPlayerClick }: { trade
         <div className="flex-1 flex flex-col items-start">
           <div className="h-8 mb-1 flex items-center justify-center w-full">
             <h3 className="text-sm font-semibold text-white underline whitespace-nowrap" style={{textUnderlineOffset: '4px'}}>
-              {trade.team1_name}
+              {trade.team1_name?.replace(/RAWDOGS/gi, 'DOGS') || trade.team1_name}
             </h3>
           </div>
           <div className="w-full flex-1 flex flex-col min-h-0">
@@ -273,7 +273,7 @@ const MiniTradeCard = ({ trade, year, showYear = false, onPlayerClick }: { trade
         <div className="flex-1 flex flex-col items-start">
           <div className="h-8 mb-1 flex items-center justify-center w-full">
             <h3 className="text-sm font-semibold text-white underline whitespace-nowrap" style={{textUnderlineOffset: '4px'}}>
-              {trade.team2_name}
+              {trade.team2_name?.replace(/RAWDOGS/gi, 'DOGS') || trade.team2_name}
             </h3>
           </div>
           <div className="w-full flex-1 flex flex-col min-h-0">
@@ -654,13 +654,6 @@ export default function TradesPage() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-blue-50 dark:from-gray-950 dark:to-blue-950 relative">
       <div className="mx-auto p-6">
-        {/* Select League Button - Top Left */}
-        <button
-          onClick={() => window.location.href = '/'}
-          className="absolute top-0 left-0 px-3 py-1.5 rounded-md bg-gradient-to-r from-purple-600 to-purple-800 text-white text-xs font-medium hover:from-purple-700 hover:to-purple-900 active:from-purple-800 active:to-purple-950 transition-all duration-150 shadow-sm hover:shadow active:shadow-none active:scale-[0.98] z-10 m-6"
-        >
-          Select League
-        </button>
         {/* Header */}
         <div className="text-center mb-8">
           <h1 className="text-4xl font-bold text-gray-900 dark:text-white mb-2 bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent">
